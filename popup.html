@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --card-border: #1f293d;
+      --text: #f3f4f6;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --primary-glow: rgba(59, 130, 246, 0.15);
+      --success: #10b981;
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.1);
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      width: 360px;
+      background-color: var(--bg);
+      color: var(--text);
+      padding: 16px;
+      font-size: 13px;
+    }
+
+    /* Header */
+    .app-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-icon {
+      width: 24px;
+      height: 24px;
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 12px;
+      color: white;
+    }
+
+    .brand-name {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      background: #1e293b;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+
+    .status-dot.running {
+      background: #f59e0b;
+      box-shadow: 0 0 6px #f59e0b;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.2); }
+    }
+
+    /* Tabs Navigation */
+    .tabs-nav {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      background: #111827;
+      padding: 3px;
+      border-radius: var(--radius);
+      margin-bottom: 14px;
+      border: 1px solid var(--card-border);
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 0;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s ease;
+    }
+
+    .tab-btn.active {
+      background: #1e293b;
+      color: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: var(--text);
+    }
+
+    /* Tab Content Panels */
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+
+    .card-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Mode Segmented Control */
+    .segmented-control {
+      display: flex;
+      background: #0b0f19;
+      padding: 3px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+      margin-bottom: 10px;
+    }
+
+    .segmented-item {
+      flex: 1;
+      text-align: center;
+    }
+
+    .segmented-item input {
+      display: none;
+    }
+
+    .segmented-item label {
+      display: block;
+      padding: 6px 0;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .segmented-item input:checked + label {
+      background: #1e293b;
+      color: #ffffff;
+    }
+
+    /* Buttons */
+    .btn {
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
+    .btn:hover {
+      filter: brightness(1.08);
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      filter: none;
+      transform: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #ffffff;
+      box-shadow: 0 1px 2px var(--primary-glow);
+    }
+
+    .btn-secondary {
+      background: #1e293b;
+      border-color: #334155;
+      color: var(--text);
+    }
+
+    .btn-secondary:hover {
+      background: #334155;
+    }
+
+    .btn-danger {
+      background: var(--danger-bg);
+      border-color: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.2);
+    }
+
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    /* Form Controls */
+    .form-group {
+      margin-bottom: 8px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .form-control {
+      width: 100%;
+      background: #0b0f19;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .form-control:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 1px var(--primary);
+    }
+
+    .helper-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    .helper-link {
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    .helper-link:hover {
+      text-decoration: underline;
+    }
+
+    /* Terminal Console */
+    .terminal {
+      background: #050811;
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      height: 140px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: #cbd5e1;
+      line-height: 1.5;
+    }
+
+    .terminal::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .terminal::-webkit-scrollbar-thumb {
+      background: #1f293d;
+      border-radius: 4px;
+    }
+
+    .terminal-time {
+      color: var(--text-dim);
+      margin-right: 4px;
+    }
+
+    /* Footer status ticker */
+    .status-ticker {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .ticker-msg {
+      max-width: 250px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Top Bar -->
+  <div class="app-header">
+    <div class="brand">
+      <div class="brand-icon">CS</div>
+      <div class="brand-name">Coursera Skipper</div>
+    </div>
+    <div class="status-pill">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Sẵn sàng</span>
+    </div>
+  </div>
+
+  <!-- Navigation Tabs -->
+  <div class="tabs-nav">
+    <button class="tab-btn active" data-tab="tab-skip">Khóa học</button>
+    <button class="tab-btn" data-tab="tab-quiz">Quiz AI</button>
+    <button class="tab-btn" data-tab="tab-peer">Peer</button>
+    <button class="tab-btn" data-tab="tab-log">Log</button>
+  </div>
+
+  <!-- TAB 1: KHÓA HỌC (AUTO SKIP) -->
+  <div class="tab-panel active" id="tab-skip">
+    <div class="card">
+      <div class="card-title">
+        <span>Tốc độ xử lý</span>
+      </div>
+      <div class="segmented-control">
+        <div class="segmented-item">
+          <input type="radio" name="farmMode" id="modeSafe" value="safe" checked>
+          <label for="modeSafe">🛡️ An toàn (Delay ngẫu nhiên)</label>
+        </div>
+        <div class="segmented-item">
+          <input type="radio" name="farmMode" id="modeTurbo" value="turbo">
+          <label for="modeTurbo">⚡ Turbo (Tức thì)</label>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 8px; margin-top: 10px;">
+        <button id="startBtn" class="btn btn-primary" style="flex: 2.5;">
+          Bắt đầu Skip (Video & Bài đọc)
+        </button>
+        <button id="stopBtn" class="btn btn-danger" disabled style="flex: 1;">
+          Dừng
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <span>Thảo luận (Discussion)</span>
+      </div>
+      <button id="discussionBtn" class="btn btn-secondary">
+        Tự động gửi phản hồi thảo luận
+      </button>
+    </div>
+  </div>
+
+  <!-- TAB 2: QUIZ AI (BATCH AI & ZERO-KEY) -->
+  <div class="tab-panel" id="tab-quiz">
+    <div class="card">
+      <div class="card-title">
+        <span>Phương thức giải</span>
+      </div>
+      <div class="segmented-control">
+        <div class="segmented-item">
+          <input type="radio" name="quizMethod" id="methodApi" value="api" checked>
+          <label for="methodApi">Dùng API Key</label>
+        </div>
+        <div class="segmented-item">
+          <input type="radio" name="quizMethod" id="methodManual" value="manual">
+          <label for="methodManual">Copy thủ công (Không Key)</label>
+        </div>
+      </div>
+
+      <!-- Mode 1: Dùng API Key -->
+      <div id="quizApiSection">
+        <div class="form-group">
+          <label>Mô hình AI</label>
+          <select id="aiProvider" class="form-control">
+            <option value="gemini">Google Gemini 2.0 Flash (Khuyên dùng - Free)</option>
+            <option value="groq">Groq Llama 3.3 70B (Siêu tốc - Free)</option>
+            <option value="openai">OpenAI GPT-4o Mini</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="apiKey" class="form-control" placeholder="Dán API Key vào đây...">
+          <div class="helper-row">
+            <span id="keyHint">Khóa xác thực API</span>
+            <a id="getKeyLink" class="helper-link" href="https://aistudio.google.com/app/apikey" target="_blank">Lấy key miễn phí ↗</a>
+          </div>
+        </div>
+
+        <button id="doQuizBtn" class="btn btn-primary" style="margin-top: 10px;">
+          Tự động giải Quiz (1-Click)
+        </button>
+      </div>
+
+      <!-- Mode 2: Copy Thủ Công (Zero-Key) -->
+      <div id="quizManualSection" style="display: none;">
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4;">
+          Không cần API Key: Copy đề bài dán vào ChatGPT Web miễn phí, sau đó dán JSON kết quả để tool tự điền.
+        </p>
+
+        <button id="copyQuizBtn" class="btn btn-secondary" style="margin-bottom: 8px;">
+          1. Copy toàn bộ đề thi (Đã format)
+        </button>
+
+        <div class="form-group">
+          <label>2. Dán kết quả JSON từ ChatGPT / Gemini:</label>
+          <textarea id="jsonInput" class="form-control" style="height: 52px; font-family: monospace; font-size: 10px;" placeholder='{"answers": {"1": [0], "2": [1]}}'></textarea>
+        </div>
+
+        <button id="applyJsonBtn" class="btn btn-primary">
+          Áp dụng & Tự điền đáp án
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: PEER REVIEW -->
+  <div class="tab-panel" id="tab-peer">
+    <div class="card">
+      <div class="card-title">
+        <span>Bài tập tự luận</span>
+      </div>
+      <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+        Tự động điền nội dung học thuật ngẫu nhiên và nộp bài.
+      </p>
+      <button id="doAssignmentBtn" class="btn btn-secondary">
+        Nộp bài tự luận (Auto Submit)
+      </button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <span>Chấm bài cho bạn cùng lớp</span>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+        <label style="font-size: 11px; color: var(--text-muted); flex: 1;">Số lượng bài cần chấm:</label>
+        <input type="number" id="gradeCount" class="form-control" value="3" min="1" max="10" style="width: 55px; text-align: center; font-weight: 600;">
+      </div>
+      <button id="gradePeerBtn" class="btn btn-secondary">
+        Bắt đầu chấm chéo điểm tối đa
+      </button>
+    </div>
+  </div>
+
+  <!-- TAB 4: TERMINAL LOG -->
+  <div class="tab-panel" id="tab-log">
+    <div class="card" style="margin-bottom: 0;">
+      <div class="card-title">
+        <span>Nhật ký tiến trình</span>
+        <a href="#" id="clearLogBtn" class="helper-link">Xóa log</a>
+      </div>
+      <div id="log" class="terminal"></div>
+    </div>
+  </div>
+
+  <!-- Bottom Ticker -->
+  <div class="status-ticker">
+    <span class="ticker-msg" id="tickerMsg">Hệ thống đã sẵn sàng</span>
+    <span style="font-size: 10px; color: var(--text-dim);">v2.0 Pro</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
