@@ -224,6 +224,7 @@ document.addEventListener('DOMContentLoaded', function () {
     async function getActiveCourseraTab() {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab || !tab.url || !tab.url.includes("coursera.org")) {
+            switchToTab('tab-log');
             log("❌ Bạn cần mở một tab khóa học trên Coursera!");
             return null;
         }
@@ -233,6 +234,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 1. SKIP VIDEOS & READING ---
     if (startBtn) {
         startBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
@@ -280,10 +282,10 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- AUDIT COURSE PROGRESS (FIND MISSING ITEMS / FIX 99%) ---
     if (auditBtn) {
         auditBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
-            switchToTab('tab-log');
             setRunningState(true, "Audit 99%");
             log("🔍 Đang kiểm tra tiến độ thực tế toàn bộ khóa học...");
             chrome.tabs.sendMessage(tab.id, { action: "AUDIT_COURSE" }, (response) => {
@@ -298,10 +300,10 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- GET CERTIFICATE & FAP LINK ---
     if (getCertBtn) {
         getCertBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
-            switchToTab('tab-log');
             setRunningState(true, "Lấy Cert");
             log("🎓 Đang truy xuất thông tin chứng chỉ & link Verify cho FAP...");
             chrome.tabs.sendMessage(tab.id, { action: "GET_CERT_INFO" }, (response) => {
@@ -341,6 +343,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 3. AUTO DISCUSSION ---
     if (discussionBtn) {
         discussionBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
@@ -358,6 +361,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 4. AUTO DO ASSIGNMENT ---
     if (doAssignmentBtn) {
         doAssignmentBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
@@ -375,6 +379,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 5. AUTO GRADE PEER ---
     if (gradePeerBtn) {
         gradePeerBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
@@ -393,6 +398,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 6. AUTO DO QUIZ (API MODE) ---
     if (doQuizBtn) {
         doQuizBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
@@ -420,6 +426,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 7. COPY QUIZ PROMPT (ZERO-KEY MODE) ---
     if (copyQuizBtn) {
         copyQuizBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
@@ -437,6 +444,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 8. APPLY JSON ANSWERS ---
     if (applyJsonBtn) {
         applyJsonBtn.addEventListener('click', async () => {
+            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 

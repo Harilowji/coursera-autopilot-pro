@@ -118,25 +118,113 @@ function extractJsonFromText(rawText) {
 function extractQuizQuestions() {
     const questions = [];
     
-    // Select question containers
+    // Strategy 1: Find dedicated question block containers on Coursera
     let questionBlocks = Array.from(document.querySelectorAll(
-        'fieldset, .rc-FormPartsQuestion, .rc-QuizQuestion, [data-testid="question-container"], div[class*="question-block"], div[class*="QuestionBlock"], div[class*="rc-FormPart"]'
+        'div[data-testid^="part-Submission_Form_"], div[data-testid*="question-container"], div[data-testid*="question-block"], div[data-testid*="QuestionBlock"], .rc-FormPartsQuestion, .rc-QuizQuestion, fieldset[class*="Question"], fieldset'
     ));
 
-    // Fallback: group by input ancestors
-    if (questionBlocks.length === 0) {
-        const inputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], select'));
-        const containerSet = new Set();
-        inputs.forEach(inp => {
-            const cont = inp.closest('fieldset, form, div[role="group"], div[class*="Question"], div[class*="question"]');
-            if (cont) containerSet.add(cont);
+    // Filter out parent containers that contain nested question containers (keep leaf question blocks)
+    questionBlocks = questionBlocks.filter(block => {
+        return !questionBlocks.some(other => other !== block && block.contains(other));
+    });
+
+    // Strategy 2: If no structured blocks or only 1 big block containing all inputs (e.g. form wrapper)
+    if (questionBlocks.length <= 1) {
+        const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], select, textarea, input[type="text"]'));
+        
+        // Group by input.name (for radios) or by common nearest container
+        const groups = new Map();
+        allInputs.forEach((inp, idx) => {
+            if (inp.id && inp.id.includes('agreement')) return;
+            if (inp.name && inp.name.includes('honor')) return;
+            if (inp.type === 'hidden') return;
+
+            let groupKey;
+            if (inp.type === 'radio' && inp.name) {
+                groupKey = `radio_${inp.name}`;
+            } else {
+                const container = inp.closest('div[role="group"], div[data-testid], fieldset, li, tr, div[class*="Part"]') || inp.parentElement?.parentElement || inp.parentElement;
+                groupKey = container || `input_${idx}`;
+            }
+
+            if (!groups.has(groupKey)) {
+                groups.set(groupKey, []);
+            }
+            groups.get(groupKey).push(inp);
         });
-        questionBlocks = Array.from(containerSet);
+
+        // Convert groups into synthesized question objects
+        let qIdx = 0;
+        for (const [key, inputs] of groups.entries()) {
+            const firstInp = inputs[0];
+            const container = firstInp.closest('div[role="group"], div[data-testid], fieldset, div[class*="Question"]') || firstInp.parentElement?.parentElement || firstInp.parentElement;
+            
+            let qType = "single";
+            if (firstInp.type === 'checkbox') qType = "multiple";
+            else if (firstInp.tagName === 'SELECT') qType = "dropdown";
+            else if (firstInp.tagName === 'TEXTAREA' || firstInp.type === 'text') qType = "text";
+
+            // Extract question text
+            let qText = "";
+            if (container) {
+                const textEl = container.querySelector('.rc-CML, [data-testid="cml-viewer"], legend, .rc-FormPart__question-text, .rc-QuestionText, h3, h4');
+                if (textEl) qText = textEl.innerText.trim();
+                else {
+                    const ancestor = container.parentElement;
+                    const ancestorTextEl = ancestor ? ancestor.querySelector('.rc-CML, legend, h3, h4, [data-testid*="question"]') : null;
+                    if (ancestorTextEl) qText = ancestorTextEl.innerText.trim();
+                }
+            }
+            if (!qText) qText = `Câu hỏi ${qIdx + 1}`;
+            qText = qText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '').replace(/\d+\s*điểm/gi, '').trim();
+
+            const options = [];
+            if (qType === "dropdown") {
+                Array.from(firstInp.options).forEach((opt, oIndex) => {
+                    if (opt.value && opt.text.trim()) {
+                        options.push({ index: oIndex, text: opt.text.trim(), value: opt.value, element: firstInp, clickTarget: firstInp });
+                    }
+                });
+            } else if (qType !== "text") {
+                inputs.forEach((inp, oIndex) => {
+                    const parentLabel = inp.closest('label');
+                    const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || parentLabel || inp.parentElement;
+                    let optText = parentLabel ? (parentLabel.innerText || "") : (parentOpt ? parentOpt.innerText : (inp.value || `Lựa chọn ${oIndex + 1}`));
+                    optText = optText.replace(/^[a-zA-Z0-9][\.\)\-]\s*/, '').trim();
+                    options.push({
+                        index: oIndex,
+                        text: optText || `Lựa chọn ${oIndex + 1}`,
+                        element: inp,
+                        clickTarget: parentOpt || inp
+                    });
+                });
+            }
+
+            questions.push({
+                id: qIdx,
+                displayNumber: qIdx + 1,
+                text: qText,
+                type: qType,
+                options: options,
+                textElement: qType === "text" ? firstInp : null
+            });
+            qIdx++;
+        }
+
+        if (questions.length > 0) return questions;
     }
 
+    // Process structured questionBlocks
     questionBlocks.forEach((qEl, qIndex) => {
-        const radioInputs = Array.from(qEl.querySelectorAll('input[type="radio"], [role="radio"]'));
-        const checkInputs = Array.from(qEl.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
+        // Query inputs safely: native inputs first to prevent duplicate options from role="radio" wrappers
+        let radioInputs = Array.from(qEl.querySelectorAll('input[type="radio"]'));
+        if (radioInputs.length === 0) {
+            radioInputs = Array.from(qEl.querySelectorAll('[role="radio"]'));
+        }
+        let checkInputs = Array.from(qEl.querySelectorAll('input[type="checkbox"]'));
+        if (checkInputs.length === 0) {
+            checkInputs = Array.from(qEl.querySelectorAll('[role="checkbox"]'));
+        }
         const selectInputs = Array.from(qEl.querySelectorAll('select'));
         const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"]'));
 
@@ -165,7 +253,8 @@ function extractQuizQuestions() {
             ".rc-FormPart__question-text",
             "div.rc-QuestionBody",
             "[data-e2e='question-text']",
-            ".rc-QuestionText"
+            ".rc-QuestionText",
+            "h3", "h4"
         ];
 
         for (const sel of contentSelectors) {
@@ -180,29 +269,18 @@ function extractQuizQuestions() {
             let rawText = qEl.innerText || "";
             rawText = rawText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '');
             rawText = rawText.replace(/\d+(?:\.\d+)?\s*points?/gi, '');
+            rawText = rawText.replace(/\d+\s*điểm/gi, '');
             rawText = rawText.replace(/^Question\s*\d+[\s\.\:]*/i, '');
-            qText = rawText.split('\n').filter(line => line.trim().length > 0)[0] || `Question ${qIndex + 1}`;
+            qText = rawText.split('\n').filter(line => line.trim().length > 0)[0] || `Câu hỏi ${qIndex + 1}`;
         }
 
         qText = qText.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
-
-        // Capture diagram / formula / image context
-        const imgs = qEl.querySelectorAll('img');
-        if (imgs.length > 0) {
-            const imgDescriptions = Array.from(imgs)
-                .map(img => img.alt || img.getAttribute('aria-label') || '')
-                .filter(t => t.trim().length > 0);
-            if (imgDescriptions.length > 0) {
-                qText += "\n[Diagrams/Formulas: " + imgDescriptions.join("; ") + "]";
-            }
-        }
 
         // Extract options
         const options = [];
         if (qType === "dropdown") {
             const selEl = selectInputs[0];
-            const optElements = Array.from(selEl.options);
-            optElements.forEach((opt, oIndex) => {
+            Array.from(selEl.options).forEach((opt, oIndex) => {
                 if (opt.value && opt.text.trim()) {
                     options.push({
                         index: oIndex,
@@ -215,20 +293,13 @@ function extractQuizQuestions() {
             });
         } else if (qType !== "text") {
             inputElements.forEach((inp, oIndex) => {
-                const parentOpt = inp.closest('label, div.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || inp.parentElement;
-                let optText = "";
-                if (parentOpt) {
-                    optText = parentOpt.innerText.trim();
-                } else {
-                    optText = inp.value || `Option ${oIndex + 1}`;
-                }
-
-                // Clean option prefixes
+                const parentLabel = inp.closest('label');
+                const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || parentLabel || inp.parentElement;
+                let optText = parentLabel ? (parentLabel.innerText || "") : (parentOpt ? parentOpt.innerText : (inp.value || `Lựa chọn ${oIndex + 1}`));
                 optText = optText.replace(/^[a-zA-Z0-9][\.\)\-]\s*/, '').trim();
-
                 options.push({
                     index: oIndex,
-                    text: optText,
+                    text: optText || `Lựa chọn ${oIndex + 1}`,
                     element: inp,
                     clickTarget: parentOpt || inp
                 });
@@ -278,6 +349,72 @@ function generateQuizPrompt(questions) {
     return prompt;
 }
 
+function triggerReactInputClick(inputEl, wrapperEl) {
+    if (!inputEl) return;
+
+    // 1. Scroll into view so user can see it being selected
+    try {
+        (wrapperEl || inputEl).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (_) {}
+
+    // 2. Focus
+    try { inputEl.focus(); } catch (_) {}
+
+    // 3. Dispatch mousedown on wrapper & input
+    try {
+        if (wrapperEl && wrapperEl !== inputEl) {
+            wrapperEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        }
+        inputEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    } catch (_) {}
+
+    // 4. Click input natively
+    try {
+        inputEl.click();
+    } catch (_) {}
+
+    // 5. Force React 16+ synthetic state update using HTMLInputElement prototype descriptor
+    if (!inputEl.checked) {
+        try {
+            const isCheckable = inputEl.type === 'radio' || inputEl.type === 'checkbox';
+            if (isCheckable) {
+                const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
+                if (descriptor && descriptor.set) {
+                    descriptor.set.call(inputEl, true);
+                } else {
+                    inputEl.checked = true;
+                }
+            }
+        } catch (_) {
+            inputEl.checked = true;
+        }
+    }
+
+    // 6. Dispatch mouseup, click, input, and change events
+    try {
+        inputEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        inputEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (_) {}
+
+    // 7. Click wrapper element (label or div.rc-Option) if separate
+    if (wrapperEl && wrapperEl !== inputEl) {
+        try {
+            wrapperEl.click();
+        } catch (_) {}
+    }
+
+    // 8. Visual indicator (Green glow)
+    try {
+        const visualTarget = wrapperEl || inputEl.parentElement || inputEl;
+        visualTarget.style.transition = 'all 0.3s ease';
+        visualTarget.style.outline = '2px solid #10b981';
+        visualTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+        visualTarget.style.borderRadius = '6px';
+    } catch (_) {}
+}
+
 async function applyQuizAnswers(parsedAnswers, questions) {
     let answersMap = parsedAnswers.answers || parsedAnswers;
     let filledCount = 0;
@@ -305,17 +442,7 @@ async function applyQuizAnswers(parsedAnswers, questions) {
                     const opt = q.options.find(o => o.index === intIdx);
                     if (opt) {
                         try {
-                            opt.clickTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            opt.clickTarget.click();
-                            if (opt.element && !opt.element.checked) {
-                                opt.element.checked = true;
-                                opt.element.dispatchEvent(new Event('input', { bubbles: true }));
-                                opt.element.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-                            // Subtle visual green glow to give user confidence
-                            opt.clickTarget.style.transition = 'all 0.3s ease';
-                            opt.clickTarget.style.outline = '2px solid #10b981';
-                            opt.clickTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
+                            triggerReactInputClick(opt.element, opt.clickTarget);
                             filledCount++;
                         } catch (e) {
                             console.warn("Click option error:", e);
@@ -323,8 +450,8 @@ async function applyQuizAnswers(parsedAnswers, questions) {
                     }
                 }
             }
-            // Human-like micro-delay between answering questions (180ms - 400ms) to evade client telemetry
-            await new Promise(r => setTimeout(r, 180 + Math.floor(Math.random() * 220)));
+            // Human-like micro-delay between questions (150ms - 350ms)
+            await new Promise(r => setTimeout(r, 150 + Math.floor(Math.random() * 200)));
         }
     }
 
@@ -335,9 +462,7 @@ async function applyQuizAnswers(parsedAnswers, questions) {
         );
         honorBoxes.forEach(box => {
             if (!box.checked) {
-                box.click();
-                box.checked = true;
-                box.dispatchEvent(new Event('change', { bubbles: true }));
+                triggerReactInputClick(box, box.parentElement);
             }
         });
     } catch (_) {}
@@ -1047,6 +1172,135 @@ class SkiperaJS {
         safeSendMessage({ action: "FINISHED" });
     }
 
+    // --- CALL AI API WITH MODEL FALLBACK CHAINS ---
+    async callAiQuizSolver(provider, apiKey, prompt) {
+        // Auto-correct provider based on key format if user mismatched them
+        if (apiKey.startsWith('gsk_') && provider !== 'groq') {
+            log("ℹ️ Nhận diện khóa Groq (gsk_...), tự động chuyển sang Groq.");
+            provider = 'groq';
+        } else if (apiKey.startsWith('sk-') && provider !== 'openai') {
+            log("ℹ️ Nhận diện khóa OpenAI (sk-...), tự động chuyển sang OpenAI.");
+            provider = 'openai';
+        } else if (apiKey.startsWith('AIzaSy') && provider !== 'gemini') {
+            log("ℹ️ Nhận diện khóa Google AI Studio, tự động chuyển sang Gemini.");
+            provider = 'gemini';
+        }
+
+        if (provider === 'gemini') {
+            // Fallback chain for Gemini: 2.0 Flash -> 1.5 Flash -> 1.5 Flash Latest
+            const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest'];
+            let lastError = null;
+            for (const model of models) {
+                try {
+                    log(`🌐 Đang kết nối tới Google Gemini (${model})...`);
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }],
+                            generationConfig: {
+                                response_mime_type: "application/json",
+                                temperature: 0.1
+                            }
+                        })
+                    });
+                    const json = await res.json();
+                    if (!res.ok) {
+                        const errMsg = json.error?.message || `Lỗi HTTP ${res.status}`;
+                        // If model not found (404), fall back to next model
+                        if (res.status === 404 || errMsg.toLowerCase().includes('not found')) {
+                            console.warn(`Gemini model ${model} not available, trying fallback...`);
+                            lastError = new Error(errMsg);
+                            continue;
+                        }
+                        throw new Error(errMsg);
+                    }
+                    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (!text) throw new Error("Gemini không trả về văn bản đáp án.");
+                    return extractJsonFromText(text);
+                } catch (err) {
+                    lastError = err;
+                    if (err.message && (err.message.includes('404') || err.message.toLowerCase().includes('not found'))) {
+                        continue;
+                    }
+                    throw err;
+                }
+            }
+            throw lastError || new Error("Không thể kết nối tới Google Gemini API.");
+
+        } else if (provider === 'groq') {
+            const models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+            let lastError = null;
+            for (const model of models) {
+                try {
+                    log(`🌐 Đang kết nối tới Groq (${model})...`);
+                    const url = `https://api.groq.com/openai/v1/chat/completions`;
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: JSON.stringify({
+                            model: model,
+                            messages: [
+                                { role: "system", content: "You are an expert academic assistant solving Coursera quizzes with 100% accuracy. Respond only with JSON." },
+                                { role: "user", content: prompt }
+                            ],
+                            response_format: { type: "json_object" },
+                            temperature: 0.1
+                        })
+                    });
+                    const json = await res.json();
+                    if (!res.ok) {
+                        const errMsg = json.error?.message || `Lỗi HTTP ${res.status}`;
+                        if (res.status === 404 || errMsg.toLowerCase().includes('decommissioned') || errMsg.toLowerCase().includes('not found')) {
+                            lastError = new Error(errMsg);
+                            continue;
+                        }
+                        throw new Error(errMsg);
+                    }
+                    const text = json.choices?.[0]?.message?.content;
+                    if (!text) throw new Error("Groq không trả về nội dung đáp án.");
+                    return extractJsonFromText(text);
+                } catch (err) {
+                    lastError = err;
+                    if (err.message && (err.message.includes('404') || err.message.toLowerCase().includes('decommissioned'))) {
+                        continue;
+                    }
+                    throw err;
+                }
+            }
+            throw lastError || new Error("Không thể kết nối tới Groq API.");
+
+        } else if (provider === 'openai') {
+            log(`🌐 Đang kết nối tới OpenAI (gpt-4o-mini)...`);
+            const url = `https://api.openai.com/v1/chat/completions`;
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: "gpt-4o-mini",
+                    messages: [
+                        { role: "system", content: "You are an expert academic assistant solving Coursera quizzes with 100% accuracy. Respond only with JSON." },
+                        { role: "user", content: prompt }
+                    ],
+                    response_format: { type: "json_object" },
+                    temperature: 0.1
+                })
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error?.message || "OpenAI API Error");
+            const text = json.choices?.[0]?.message?.content;
+            if (!text) throw new Error("OpenAI không trả về nội dung đáp án.");
+            return extractJsonFromText(text);
+        }
+    }
+
     // --- AUTO DO QUIZ (BATCH AI CALL) ---
     async autoDoQuiz(provider, apiKey) {
         log(`🧠 Bắt đầu quét câu hỏi đề thi...`);
@@ -1057,18 +1311,19 @@ class SkiperaJS {
             const buttons = Array.from(document.querySelectorAll('button, a'));
             const startBtn = buttons.find(b => {
                 const t = b.textContent.trim().toLowerCase();
-                return ['start assignment', 'start attempt', 'resume', 'retake', 'start quiz', 'take quiz', 'bắt đầu'].some(k => t.includes(k));
+                return ['start assignment', 'start attempt', 'resume assignment', 'resume', 'retake', 'start quiz', 'take quiz', 'bắt đầu', 'làm bài', 'try again'].some(k => t.includes(k));
             });
             if (startBtn) {
                 log("ℹ️ Phát hiện nút vào thi. Đang tự động mở bài thi...");
                 startBtn.click();
-                await new Promise(r => setTimeout(r, 3500));
+                await new Promise(r => setTimeout(r, 4000));
                 questions = extractQuizQuestions();
             }
         }
 
         if (questions.length === 0) {
             log("❌ Không tìm thấy câu hỏi trắc nghiệm nào trên trang hiện tại!");
+            log("👉 Hãy chắc chắn bạn đã nhấn 'Start' hoặc 'Resume' trên Coursera để vào màn hình có câu hỏi!");
             safeSendMessage({ action: "FINISHED" });
             return;
         }
@@ -1077,70 +1332,7 @@ class SkiperaJS {
         const prompt = generateQuizPrompt(questions);
 
         try {
-            let aiResponseJson = null;
-
-            if (provider === 'gemini') {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: {
-                            response_mime_type: "application/json",
-                            temperature: 0.1
-                        }
-                    })
-                });
-                const json = await res.json();
-                if (!res.ok) throw new Error(json.error?.message || "Gemini API Error");
-                const text = json.candidates[0].content.parts[0].text;
-                aiResponseJson = extractJsonFromText(text);
-
-            } else if (provider === 'groq') {
-                const url = `https://api.groq.com/openai/v1/chat/completions`;
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: "llama-3.3-70b-versatile",
-                        messages: [
-                            { role: "system", content: "You are an expert academic assistant solving Coursera quizzes with 100% accuracy. Respond only with JSON." },
-                            { role: "user", content: prompt }
-                        ],
-                        response_format: { type: "json_object" },
-                        temperature: 0.1
-                    })
-                });
-                const json = await res.json();
-                if (!res.ok) throw new Error(json.error?.message || "Groq API Error");
-                aiResponseJson = extractJsonFromText(json.choices[0].message.content);
-
-            } else if (provider === 'openai') {
-                const url = `https://api.openai.com/v1/chat/completions`;
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: "gpt-4o-mini",
-                        messages: [
-                            { role: "system", content: "You are an expert academic assistant solving Coursera quizzes with 100% accuracy. Respond only with JSON." },
-                            { role: "user", content: prompt }
-                        ],
-                        response_format: { type: "json_object" },
-                        temperature: 0.1
-                    })
-                });
-                const json = await res.json();
-                if (!res.ok) throw new Error(json.error?.message || "OpenAI API Error");
-                aiResponseJson = extractJsonFromText(json.choices[0].message.content);
-            }
+            const aiResponseJson = await this.callAiQuizSolver(provider, apiKey, prompt);
 
             if (!aiResponseJson) {
                 throw new Error("Không thể phân tích dữ liệu JSON trả về từ AI.");
@@ -1153,6 +1345,11 @@ class SkiperaJS {
 
         } catch (e) {
             log(`❌ Lỗi gọi AI: ${e.message}`);
+            if (e.message && e.message.includes('API_KEY_INVALID')) {
+                log("👉 Khóa API của bạn không đúng hoặc đã hết hạn. Hãy kiểm tra lại trong tab Quiz AI.");
+            } else if (e.message && (e.message.includes('quota') || e.message.includes('exhausted'))) {
+                log("👉 Bạn đã chạm hạn mức miễn phí (Rate Limit/Quota). Hãy thử chuyển sang Groq Llama 3.3 hoặc dùng chế độ Zero-Key.");
+            }
             safeSendMessage({ action: "FINISHED" });
         }
     }
