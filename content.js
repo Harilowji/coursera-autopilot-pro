@@ -1368,8 +1368,14 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Fallback chain for Gemini: 2.0 Flash -> 1.5 Flash -> 1.5 Flash Latest
-            const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest'];
+            // Priority fallback chain: 3.8 Flash -> 3.5 Flash-Lite -> 2.0 Flash -> 1.5 Flash
+            const models = [
+                'gemini-3.8-flash',
+                'gemini-3.5-flash-lite',
+                'gemini-2.0-flash',
+                'gemini-1.5-flash',
+                'gemini-1.5-flash-latest'
+            ];
             let lastError = null;
             for (const model of models) {
                 try {
