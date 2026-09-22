@@ -1368,11 +1368,11 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Priority fallback chain: 3.8 Flash -> 3.5 Flash-Lite -> 2.0 Flash -> 1.5 Flash
+            // Priority fallback chain: Google recently deprecated 2.0 and requests 3.6-flash
             const models = [
+                'gemini-3.6-flash',
                 'gemini-3.8-flash',
-                'gemini-3.5-flash-lite',
-                'gemini-2.0-flash',
+                'gemini-2.5-flash',
                 'gemini-1.5-flash',
                 'gemini-1.5-flash-latest'
             ];
@@ -1395,23 +1395,23 @@ class SkiperaJS {
                     const json = await res.json();
                     if (!res.ok) {
                         const errMsg = json.error?.message || `Lỗi HTTP ${res.status}`;
-                        // If model not found (404), fall back to next model
-                        if (res.status === 404 || errMsg.toLowerCase().includes('not found')) {
-                            console.warn(`Gemini model ${model} not available, trying fallback...`);
-                            lastError = new Error(errMsg);
-                            continue;
+                        if (errMsg.includes('API_KEY_INVALID') || errMsg.toLowerCase().includes('api key not valid')) {
+                            throw new Error("API Key Google Gemini không hợp lệ. Vui lòng kiểm tra lại key của bạn.");
                         }
-                        throw new Error(errMsg);
+                        console.warn(`Gemini model ${model} error (${errMsg}), thử model tiếp theo...`);
+                        lastError = new Error(errMsg);
+                        continue;
                     }
                     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
                     if (!text) throw new Error("Gemini không trả về văn bản đáp án.");
                     return extractJsonFromText(text);
                 } catch (err) {
                     lastError = err;
-                    if (err.message && (err.message.includes('404') || err.message.toLowerCase().includes('not found'))) {
-                        continue;
+                    if (err.message && err.message.includes('API Key Google Gemini không hợp lệ')) {
+                        throw err;
                     }
-                    throw err;
+                    console.warn(`Lỗi khi gọi Gemini model ${model}:`, err.message);
+                    continue;
                 }
             }
             throw lastError || new Error("Không thể kết nối tới Google Gemini API.");
@@ -1442,21 +1442,23 @@ class SkiperaJS {
                     const json = await res.json();
                     if (!res.ok) {
                         const errMsg = json.error?.message || `Lỗi HTTP ${res.status}`;
-                        if (res.status === 404 || errMsg.toLowerCase().includes('decommissioned') || errMsg.toLowerCase().includes('not found')) {
-                            lastError = new Error(errMsg);
-                            continue;
+                        if (errMsg.toLowerCase().includes('invalid_api_key') || errMsg.toLowerCase().includes('unauthorized') || res.status === 401) {
+                            throw new Error("API Key Groq không hợp lệ hoặc chưa được xác thực.");
                         }
-                        throw new Error(errMsg);
+                        console.warn(`Groq model ${model} error (${errMsg}), thử model tiếp theo...`);
+                        lastError = new Error(errMsg);
+                        continue;
                     }
                     const text = json.choices?.[0]?.message?.content;
                     if (!text) throw new Error("Groq không trả về nội dung đáp án.");
                     return extractJsonFromText(text);
                 } catch (err) {
                     lastError = err;
-                    if (err.message && (err.message.includes('404') || err.message.toLowerCase().includes('decommissioned'))) {
-                        continue;
+                    if (err.message && err.message.includes('API Key Groq không hợp lệ')) {
+                        throw err;
                     }
-                    throw err;
+                    console.warn(`Lỗi khi gọi Groq model ${model}:`, err.message);
+                    continue;
                 }
             }
             throw lastError || new Error("Không thể kết nối tới Groq API.");

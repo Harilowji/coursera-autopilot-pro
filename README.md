@@ -6,7 +6,7 @@
 ![Manifest](https://img.shields.io/badge/manifest-v3-success.svg?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-purple.svg?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Chrome%20%7C%20Edge%20%7C%20Brave-orange.svg?style=flat-square)
-![AI Providers](https://img.shields.io/badge/AI-Gemini%202.0%20%7C%20Groq%20Llama%203.3%20%7C%20OpenAI-emerald.svg?style=flat-square)
+![AI Providers](https://img.shields.io/badge/AI-Gemini%203.6%20%7C%20Groq%20Llama%203.3%20%7C%20OpenAI-emerald.svg?style=flat-square)
 
 **Bộ công cụ tự động hóa học tập Coursera thông minh, an toàn, tích hợp AI giải Quiz 1-Click và trích xuất chứng chỉ nộp trường (FAP).**
 
@@ -26,7 +26,7 @@
 
 ### 2. 🧠 Giải Bài Thi Trắc Nghiệm Bằng AI (Batch AI & Zero-Key)
 * **⚡ Batch Processing:** Gom toàn bộ 10–30 câu hỏi trong đề thi gửi 1 lần duy nhất, nhận kết quả và tự động điền trong vòng 2–3 giây (không lo chạm giới hạn 15 RPM).
-* **Đa Dạng Nhà Cung Cấp AI:** Hỗ trợ **Google Gemini 2.0 Flash** (miễn phí), **Groq Llama 3.3 70B** (siêu tốc, miễn phí), và **OpenAI GPT-4o Mini**.
+* **Đa Dạng Nhà Cung Cấp AI:** Hỗ trợ **Google Gemini 3.6 / 3.8 Flash** (miễn phí), **Groq Llama 3.3 70B** (siêu tốc, miễn phí), và **OpenAI GPT-4o Mini**.
 * **📋 Chế Độ Không Cần Key (Zero-Key):** 1-Click sao chép toàn bộ đề thi đã được chuẩn hóa Prompt để dán vào ChatGPT / Gemini Web miễn phí, sau đó dán kết quả JSON để tiện ích tự động tích chọn đáp án.
 * **Deep DOM Parser:** Tự động nhận diện câu hỏi 1 đáp án, nhiều đáp án (checkbox), menu thả xuống (dropdown), hình ảnh sơ đồ và tự động tích cam kết danh dự (Honor Code).
 
@@ -81,7 +81,7 @@ Giao diện tinh gọn chuẩn Linear / Raycast với 4 chủ đề đổi màu 
 * Bấm **▶ Bắt đầu Skip**. Tiến trình và thanh % sẽ chạy trực tiếp.
 
 ### 2. Giải bài thi trắc nghiệm (Quiz)
-* **Cách 1 (Tự động với API Key):** Chọn mô hình AI (*Google Gemini 2.0 Flash* hoặc *Groq Llama 3.3*), dán API Key (miễn phí) và bấm **Tự động giải Quiz (1-Click)** khi đang ở trang làm bài.
+* **Cách 1 (Tự động với API Key):** Chọn mô hình AI (*Google Gemini 3.6 / 3.8 Flash* hoặc *Groq Llama 3.3*), dán API Key (miễn phí) và bấm **Tự động giải Quiz (1-Click)** khi đang ở trang làm bài.
 * **Cách 2 (Zero-Key - Không cần Key):** Chuyển sang thẻ *Không cần Key*, bấm **1. Copy đề thi (Kèm Prompt)** ➔ Dán vào [ChatGPT](https://chatgpt.com) hoặc [Gemini Web](https://gemini.google.com) ➔ Copy kết quả JSON dán vào ô số 2 ➔ Bấm **3. Áp dụng & Điền đáp án**.
 
 ### 3. Nộp bài tự luận & Chấm chéo (Peer Review)
