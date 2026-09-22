@@ -130,7 +130,7 @@ function extractQuizQuestions() {
 
     // Strategy 2: If no structured blocks or only 1 big block containing all inputs (e.g. form wrapper)
     if (questionBlocks.length <= 1) {
-        const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], select, textarea, input[type="text"]'));
+        const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], select, textarea, input[type="text"], input[type="number"]'));
         
         // Group by input.name (for radios) or by common nearest container
         const groups = new Map();
@@ -162,7 +162,7 @@ function extractQuizQuestions() {
             let qType = "single";
             if (firstInp.type === 'checkbox') qType = "multiple";
             else if (firstInp.tagName === 'SELECT') qType = "dropdown";
-            else if (firstInp.tagName === 'TEXTAREA' || firstInp.type === 'text') qType = "text";
+            else if (firstInp.tagName === 'TEXTAREA' || firstInp.type === 'text' || firstInp.type === 'number') qType = "text";
 
             // Extract question text
             let qText = "";
@@ -206,7 +206,8 @@ function extractQuizQuestions() {
                 text: qText,
                 type: qType,
                 options: options,
-                textElement: qType === "text" ? firstInp : null
+                textElement: qType === "text" ? firstInp : null,
+                textElements: qType === "text" ? inputs : []
             });
             qIdx++;
         }
@@ -312,7 +313,8 @@ function extractQuizQuestions() {
             text: qText,
             type: qType,
             options: options,
-            textElement: qType === "text" ? inputElements[0] : null
+            textElement: qType === "text" ? textInputs[0] : null,
+            textElements: qType === "text" ? textInputs : []
         });
     });
 
@@ -321,26 +323,33 @@ function extractQuizQuestions() {
 
 function generateQuizPrompt(questions) {
     let prompt = "You are an expert academic assistant solving a Coursera quiz with 100% accuracy.\n";
-    prompt += "Analyze each question carefully and return ONLY a single, valid JSON object in this exact format:\n";
+    prompt += "Analyze each question and its choices carefully. Return ONLY a single, valid JSON object in this exact format:\n";
     prompt += "{\n  \"answers\": {\n";
     prompt += "    \"1\": [0],\n";
-    prompt += "    \"2\": [1, 2]\n";
-    prompt += "  }\n}\n";
-    prompt += "RULES:\n";
-    prompt += "- Keys are question numbers (\"1\", \"2\", ...).\n";
-    prompt += "- Values are arrays of 0-based option index numbers that represent the correct choices.\n";
-    prompt += "- For 'Single Choice' or 'Dropdown': select exactly one index (e.g. [0]).\n";
-    prompt += "- For 'Multiple Choice': select all correct indices (e.g. [1, 2]).\n";
-    prompt += "- Return ONLY raw JSON without explanation.\n\n";
-    prompt += "=== QUIZ QUESTIONS ===\n\n";
+    prompt += "    \"2\": [1, 2],\n";
+    prompt += "    \"3\": \"my text answer\"\n";
+    prompt += "  }\n}\n\n";
+    prompt += "RULES FOR QUIZ SOLVING:\n";
+    prompt += "1. Keys MUST be question numbers (\"1\", \"2\", \"3\", ...).\n";
+    prompt += "2. For 'Single Choice' or 'Dropdown': return an array with exactly one 0-based option index, e.g. [0] or [2].\n";
+    prompt += "3. For 'Multiple Choice' (Select all that apply): return an array of all correct 0-based option indices, e.g. [0, 2].\n";
+    prompt += "4. For 'Fill in the blank' / 'Text' / 'Numeric': return the exact string or number answer (e.g. \"42\" or \"supervised learning\").\n";
+    prompt += "5. Return ONLY raw JSON without markdown fences, explanation, or notes.\n\n";
+    prompt += "=== EXAM QUESTIONS ===\n\n";
 
     questions.forEach(q => {
-        prompt += `Question ${q.displayNumber} (${q.type === 'multiple' ? 'Multiple Choice - Select all that apply' : 'Single Choice - Select one'}):\n`;
+        let typeDesc = "Single Choice - Select one";
+        if (q.type === 'multiple') typeDesc = "Multiple Choice - Select all that apply";
+        else if (q.type === 'text') typeDesc = "Fill in the blank / Direct Answer";
+        else if (q.type === 'dropdown') typeDesc = "Dropdown Selection";
+
+        prompt += `--- Question ${q.displayNumber} (${typeDesc}) ---\n`;
         prompt += `${q.text}\n`;
         if (q.options.length > 0) {
             prompt += "Options:\n";
             q.options.forEach(opt => {
-                prompt += `  [${opt.index}]: ${opt.text}\n`;
+                const letter = String.fromCharCode(65 + opt.index);
+                prompt += `  [${opt.index}] (${letter}): ${opt.text}\n`;
             });
         }
         prompt += "\n";
@@ -349,110 +358,281 @@ function generateQuizPrompt(questions) {
     return prompt;
 }
 
-function triggerReactInputClick(inputEl, wrapperEl) {
+// Helper to set React text input or textarea value reliably
+function setReactInputValue(inputEl, value) {
     if (!inputEl) return;
+    try {
+        inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        inputEl.focus();
 
-    // 1. Scroll into view so user can see it being selected
+        const proto = (inputEl.tagName === 'TEXTAREA')
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+        const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+
+        // Reset React internal _valueTracker so synthetic event system detects change
+        const tracker = inputEl._valueTracker;
+        if (tracker) {
+            tracker.setValue('');
+        }
+
+        if (valueSetter) {
+            valueSetter.call(inputEl, String(value));
+        } else {
+            inputEl.value = String(value);
+        }
+
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+        // Fallback for rich/custom inputs
+        try {
+            document.execCommand('insertText', false, String(value));
+        } catch (_) {}
+
+        // Visual indicator (green border glow)
+        inputEl.style.transition = 'all 0.3s ease';
+        inputEl.style.outline = '2px solid #10b981';
+        inputEl.style.backgroundColor = 'rgba(16, 185, 129, 0.12)';
+        inputEl.style.borderRadius = '4px';
+    } catch (e) {
+        console.warn("[AutopilotPro] setReactInputValue error:", e);
+    }
+}
+
+// Helper to simulate natural user click and update React radio/checkbox state
+function triggerReactInputClick(inputEl, wrapperEl) {
+    if (!inputEl && !wrapperEl) return;
+
+    const targetToClick = wrapperEl || inputEl;
+    const realInput = (inputEl && (inputEl.tagName === 'INPUT' || inputEl.tagName === 'SELECT'))
+        ? inputEl
+        : (wrapperEl ? wrapperEl.querySelector('input') : null);
+
+    // 1. Scroll into view
     try {
         (wrapperEl || inputEl).scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (_) {}
 
     // 2. Focus
-    try { inputEl.focus(); } catch (_) {}
-
-    // 3. Dispatch mousedown on wrapper & input
     try {
-        if (wrapperEl && wrapperEl !== inputEl) {
-            wrapperEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        }
-        inputEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        if (realInput) realInput.focus();
+        else targetToClick.focus();
     } catch (_) {}
 
-    // 4. Click input natively
+    // 3. Dispatch natural pointer & click events
     try {
-        inputEl.click();
+        targetToClick.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window, isPrimary: true }));
+        targetToClick.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, buttons: 1 }));
+        targetToClick.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window, isPrimary: true }));
+        targetToClick.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, buttons: 1 }));
+        targetToClick.click();
     } catch (_) {}
 
-    // 5. Force React 16+ synthetic state update using HTMLInputElement prototype descriptor
-    if (!inputEl.checked) {
-        try {
-            const isCheckable = inputEl.type === 'radio' || inputEl.type === 'checkbox';
-            if (isCheckable) {
+    // 4. If the input is a native radio or checkbox, verify and enforce checked state
+    if (realInput && (realInput.type === 'radio' || realInput.type === 'checkbox')) {
+        if (!realInput.checked) {
+            try {
+                // React internal valueTracker bypass
+                const tracker = realInput._valueTracker;
+                if (tracker) {
+                    tracker.setValue(!realInput.checked);
+                }
                 const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
                 if (descriptor && descriptor.set) {
-                    descriptor.set.call(inputEl, true);
+                    descriptor.set.call(realInput, true);
                 } else {
-                    inputEl.checked = true;
+                    realInput.checked = true;
                 }
+                realInput.dispatchEvent(new Event('input', { bubbles: true }));
+                realInput.dispatchEvent(new Event('change', { bubbles: true }));
+            } catch (_) {
+                realInput.checked = true;
             }
-        } catch (_) {
-            inputEl.checked = true;
         }
+    } else if (targetToClick.hasAttribute('aria-checked')) {
+        targetToClick.setAttribute('aria-checked', 'true');
     }
 
-    // 6. Dispatch mouseup, click, input, and change events
+    // 5. Visual indicator (Emerald glow)
     try {
-        inputEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        inputEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
-    } catch (_) {}
-
-    // 7. Click wrapper element (label or div.rc-Option) if separate
-    if (wrapperEl && wrapperEl !== inputEl) {
-        try {
-            wrapperEl.click();
-        } catch (_) {}
-    }
-
-    // 8. Visual indicator (Green glow)
-    try {
-        const visualTarget = wrapperEl || inputEl.parentElement || inputEl;
+        const visualTarget = wrapperEl || inputEl;
         visualTarget.style.transition = 'all 0.3s ease';
         visualTarget.style.outline = '2px solid #10b981';
-        visualTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+        visualTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.18)';
         visualTarget.style.borderRadius = '6px';
     } catch (_) {}
 }
 
+// Helper to extract the answer for a specific question from whatever JSON format AI produced
+function getAnswerForQuestion(answersMap, q) {
+    if (!answersMap) return undefined;
+
+    // If answersMap is an Array
+    if (Array.isArray(answersMap)) {
+        if (answersMap[q.id] !== undefined) return answersMap[q.id];
+        if (answersMap[q.displayNumber - 1] !== undefined) return answersMap[q.displayNumber - 1];
+        const item = answersMap.find(it => it && (it.question == q.displayNumber || it.id == q.displayNumber || it.question == q.id));
+        if (item) return item.answer !== undefined ? item.answer : (item.answers || item.selected || item.value);
+    }
+
+    // Direct key matches
+    const candidateKeys = [
+        String(q.displayNumber),
+        String(q.id),
+        `Question ${q.displayNumber}`,
+        `question ${q.displayNumber}`,
+        `Question_${q.displayNumber}`,
+        `question_${q.displayNumber}`,
+        `Q${q.displayNumber}`,
+        `q${q.displayNumber}`
+    ];
+
+    for (const k of candidateKeys) {
+        if (answersMap[k] !== undefined) return answersMap[k];
+    }
+
+    // Fuzzy case-insensitive key search
+    for (const [k, v] of Object.entries(answersMap)) {
+        const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (cleanK === String(q.displayNumber) || cleanK === `question${q.displayNumber}` || cleanK === `q${q.displayNumber}`) {
+            return v;
+        }
+    }
+
+    return undefined;
+}
+
+// Helper to convert any raw answer (integer, letter "A", array, text string) into valid option indices
+function resolveOptionIndices(rawAnswer, options) {
+    if (rawAnswer === undefined || rawAnswer === null || !options || options.length === 0) return [];
+    const items = Array.isArray(rawAnswer) ? rawAnswer : [rawAnswer];
+    const resolved = new Set();
+
+    for (let item of items) {
+        if (item === undefined || item === null) continue;
+
+        if (typeof item === 'object') {
+            if (item.index !== undefined) item = item.index;
+            else if (item.answer !== undefined) item = item.answer;
+            else if (item.value !== undefined) item = item.value;
+        }
+
+        // 1. Direct number check
+        const num = Number(item);
+        if (!isNaN(num) && Number.isInteger(num)) {
+            if (options.some(o => o.index === num)) {
+                resolved.add(num);
+                continue;
+            }
+        }
+
+        // 2. Letter check (A, B, C, D, E, F...)
+        if (typeof item === 'string') {
+            const trimmed = item.trim().toUpperCase();
+            if (/^[A-H]$/.test(trimmed)) {
+                const letterIndex = trimmed.charCodeAt(0) - 65;
+                if (options.some(o => o.index === letterIndex)) {
+                    resolved.add(letterIndex);
+                    continue;
+                }
+            }
+        }
+
+        // 3. Text fuzzy match against option text
+        if (typeof item === 'string' && item.trim().length > 0) {
+            const itemLower = item.trim().toLowerCase();
+            const matched = options.find(o => {
+                const optLower = (o.text || '').toLowerCase();
+                return optLower === itemLower || optLower.includes(itemLower) || itemLower.includes(optLower);
+            });
+            if (matched) {
+                resolved.add(matched.index);
+                continue;
+            }
+        }
+    }
+
+    return Array.from(resolved);
+}
+
 async function applyQuizAnswers(parsedAnswers, questions) {
     let answersMap = parsedAnswers.answers || parsedAnswers;
+    if (typeof answersMap !== 'object' || answersMap === null) {
+        answersMap = parsedAnswers;
+    }
     let filledCount = 0;
 
     for (const q of questions) {
-        let key = String(q.displayNumber);
-        let selectedIndices = answersMap[key] !== undefined ? answersMap[key] : answersMap[String(q.id)];
+        const rawAnswer = getAnswerForQuestion(answersMap, q);
+        if (rawAnswer === undefined || rawAnswer === null) {
+            console.warn(`[AutopilotPro] Không tìm thấy đáp án cho câu ${q.displayNumber}`);
+            continue;
+        }
 
-        if (selectedIndices !== undefined) {
-            if (!Array.isArray(selectedIndices)) {
-                selectedIndices = [selectedIndices];
+        // Case 1: Dropdown
+        if (q.type === "dropdown" && q.options.length > 0) {
+            const resolved = resolveOptionIndices(rawAnswer, q.options);
+            const targetIdx = resolved.length > 0 ? resolved[0] : 0;
+            const selEl = q.options[0].element;
+            if (selEl && targetIdx >= 0 && targetIdx < selEl.options.length) {
+                selEl.selectedIndex = targetIdx;
+                selEl.dispatchEvent(new Event('input', { bubbles: true }));
+                selEl.dispatchEvent(new Event('change', { bubbles: true }));
+                filledCount++;
+                const chosenText = selEl.options[targetIdx]?.text || targetIdx;
+                log(`✅ [Câu ${q.displayNumber}] Đã chọn menu: "${chosenText}"`);
             }
 
-            if (q.type === "dropdown" && q.options.length > 0) {
-                const targetIdx = parseInt(selectedIndices[0], 10);
-                const selEl = q.options[0].element;
-                if (selEl && targetIdx >= 0 && targetIdx < selEl.options.length) {
-                    selEl.selectedIndex = targetIdx;
-                    selEl.dispatchEvent(new Event('change', { bubbles: true }));
-                    filledCount++;
-                }
-            } else {
-                for (const idx of selectedIndices) {
-                    const intIdx = parseInt(idx, 10);
-                    const opt = q.options.find(o => o.index === intIdx);
-                    if (opt) {
-                        try {
-                            triggerReactInputClick(opt.element, opt.clickTarget);
-                            filledCount++;
-                        } catch (e) {
-                            console.warn("Click option error:", e);
-                        }
+        // Case 2: Fill-in-the-blank / Text / Numeric input
+        } else if (q.type === "text" && (q.textElement || (q.textElements && q.textElements.length > 0))) {
+            let answerText = "";
+            if (typeof rawAnswer === 'string' || typeof rawAnswer === 'number') {
+                answerText = String(rawAnswer).trim();
+            } else if (Array.isArray(rawAnswer) && rawAnswer.length > 0) {
+                answerText = String(rawAnswer[0]).trim();
+            } else if (typeof rawAnswer === 'object') {
+                answerText = String(rawAnswer.text || rawAnswer.answer || rawAnswer.value || '').trim();
+            }
+
+            const targetInput = q.textElement || q.textElements[0];
+            if (targetInput && answerText) {
+                setReactInputValue(targetInput, answerText);
+                filledCount++;
+                log(`✏️ [Câu ${q.displayNumber}] Đã điền vào ô: "${answerText.length > 30 ? answerText.substring(0, 27) + '...' : answerText}"`);
+            }
+
+        // Case 3: Radio button (Single choice) or Checkbox (Multiple choice)
+        } else if (q.options.length > 0) {
+            const resolvedIndices = resolveOptionIndices(rawAnswer, q.options);
+            if (resolvedIndices.length === 0) {
+                console.warn(`[AutopilotPro] Không khớp được lựa chọn nào cho câu ${q.displayNumber}:`, rawAnswer);
+                continue;
+            }
+
+            const chosenLabels = [];
+            for (const optIdx of resolvedIndices) {
+                const opt = q.options.find(o => o.index === optIdx);
+                if (opt) {
+                    try {
+                        triggerReactInputClick(opt.element, opt.clickTarget);
+                        filledCount++;
+                        const letter = String.fromCharCode(65 + opt.index);
+                        const shortText = opt.text.length > 30 ? opt.text.substring(0, 28) + '...' : opt.text;
+                        chosenLabels.push(`[${letter}] ${shortText}`);
+                    } catch (e) {
+                        console.warn("Click option error:", e);
                     }
                 }
             }
-            // Human-like micro-delay between questions (150ms - 350ms)
-            await new Promise(r => setTimeout(r, 150 + Math.floor(Math.random() * 200)));
+
+            if (chosenLabels.length > 0) {
+                log(`✅ [Câu ${q.displayNumber}] Đã chọn: ${chosenLabels.join(' | ')}`);
+            }
         }
+
+        // Human-like delay between questions (150ms - 300ms)
+        await new Promise(r => setTimeout(r, 150 + Math.floor(Math.random() * 150)));
     }
 
     // Auto-check Coursera Honor Code agreement checkbox if present
@@ -463,6 +643,7 @@ async function applyQuizAnswers(parsedAnswers, questions) {
         honorBoxes.forEach(box => {
             if (!box.checked) {
                 triggerReactInputClick(box, box.parentElement);
+                log("🤝 Đã tự động tích cam kết danh dự (Honor Code Agreement).");
             }
         });
     } catch (_) {}
@@ -1340,7 +1521,12 @@ class SkiperaJS {
 
             log("🎯 Đã nhận đáp án từ AI! Tiến hành tích chọn trên giao diện bài thi...");
             const filled = await applyQuizAnswers(aiResponseJson, questions);
-            log(`🎉 Hoàn thành! Đã tự động điền đáp án cho ${filled} lựa chọn (và tự tích cam kết danh dự).`);
+            if (filled > 0) {
+                log(`🎉 Hoàn tất! Đã tự động điền/tích ${filled} vị trí đáp án (và tự tích cam kết danh dự).`);
+                log("👉 Mời bạn kiểm tra lại các đáp án trên màn hình và bấm 'Nộp bài' (Submit)!");
+            } else {
+                log("⚠️ AI đã phản hồi nhưng không khớp được ô nào để điền. Hãy kiểm tra lại màn hình câu hỏi!");
+            }
             safeSendMessage({ action: "FINISHED" });
 
         } catch (e) {
