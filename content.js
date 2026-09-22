@@ -1533,6 +1533,9 @@ class SkiperaJS {
             log(`❌ Lỗi gọi AI: ${e.message}`);
             if (e.message && e.message.includes('API_KEY_INVALID')) {
                 log("👉 Khóa API của bạn không đúng hoặc đã hết hạn. Hãy kiểm tra lại trong tab Quiz AI.");
+            } else if (e.message && (e.message.includes('no credits') || e.message.includes('billing') || e.message.includes('insufficient_quota'))) {
+                log("💡 Tài khoản OpenAI của bạn đã hết số dư (0 credit).");
+                log("👉 Khuyên dùng: Đổi sang Google Gemini hoặc Groq trong tab Quiz AI (Hoàn toàn MIỄN PHÍ 100%, không cần nạp tiền), hoặc dùng chế độ Zero-Key!");
             } else if (e.message && (e.message.includes('quota') || e.message.includes('exhausted'))) {
                 log("👉 Bạn đã chạm hạn mức miễn phí (Rate Limit/Quota). Hãy thử chuyển sang Groq Llama 3.3 hoặc dùng chế độ Zero-Key.");
             }
