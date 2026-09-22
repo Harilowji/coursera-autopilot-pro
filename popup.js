@@ -2,6 +2,8 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- Elements ---
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const auditBtn = document.getElementById('auditBtn');
+    const getCertBtn = document.getElementById('getCertBtn');
     const discussionBtn = document.getElementById('discussionBtn');
     const gradePeerBtn = document.getElementById('gradePeerBtn');
     const doAssignmentBtn = document.getElementById('doAssignmentBtn');
@@ -21,6 +23,54 @@ document.addEventListener('DOMContentLoaded', function () {
     const tickerMsg = document.getElementById('tickerMsg');
     const quizApiSection = document.getElementById('quizApiSection');
     const quizManualSection = document.getElementById('quizManualSection');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressFill = document.getElementById('progressFill');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressLabel = document.getElementById('progressLabel');
+    const certBanner = document.getElementById('certBanner');
+    const certStudentName = document.getElementById('certStudentName');
+    const certUrlInput = document.getElementById('certUrlInput');
+    const copyCertBtn = document.getElementById('copyCertBtn');
+
+    // --- Theme Switcher Logic (Emerald, Cyan, Amber, Nordic) ---
+    function applyTheme(themeName) {
+        const validTheme = ['emerald', 'cyan', 'amber', 'nordic'].includes(themeName) ? themeName : 'cyan';
+        document.documentElement.setAttribute('data-theme', validTheme);
+        document.querySelectorAll('.theme-dot').forEach(dot => {
+            if (dot.getAttribute('data-theme') === validTheme) {
+                dot.classList.add('active');
+            } else {
+                dot.classList.remove('active');
+            }
+        });
+    }
+
+    document.querySelectorAll('.theme-dot').forEach(dot => {
+        dot.addEventListener('click', () => {
+            const theme = dot.getAttribute('data-theme');
+            applyTheme(theme);
+            chrome.storage.local.set({ 'app_theme': theme });
+        });
+    });
+
+    chrome.storage.local.get(['app_theme'], (data) => {
+        applyTheme(data.app_theme || 'cyan');
+    });
+
+    // --- Helper to show certificate banner ---
+    function showCertBanner(url, name) {
+        if (!certBanner) return;
+        certBanner.style.display = 'block';
+        if (certStudentName) certStudentName.textContent = name || "Học viên Coursera";
+        if (certUrlInput) certUrlInput.value = url;
+    }
+
+    // Load cached cert if exists
+    chrome.storage.local.get(['savedCertUrl', 'savedCertName'], (res) => {
+        if (res.savedCertUrl) {
+            showCertBanner(res.savedCertUrl, res.savedCertName || "Học viên Coursera");
+        }
+    });
 
     // --- Provider Meta ---
     const PROVIDER_INFO = {
@@ -221,16 +271,85 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // --- Helper to switch tabs ---
+    function switchToTab(tabId) {
+        const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+        if (btn) btn.click();
+    }
+
+    // --- AUDIT COURSE PROGRESS (FIND MISSING ITEMS / FIX 99%) ---
+    if (auditBtn) {
+        auditBtn.addEventListener('click', async () => {
+            const tab = await getActiveCourseraTab();
+            if (!tab) return;
+
+            switchToTab('tab-log');
+            setRunningState(true, "Audit 99%");
+            log("🔍 Đang kiểm tra tiến độ thực tế toàn bộ khóa học...");
+            chrome.tabs.sendMessage(tab.id, { action: "AUDIT_COURSE" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    log("❌ Hãy mở trang chủ khóa học (/home/welcome hoặc /home/week/1) rồi thử lại.");
+                    setRunningState(false);
+                }
+            });
+        });
+    }
+
+    // --- GET CERTIFICATE & FAP LINK ---
+    if (getCertBtn) {
+        getCertBtn.addEventListener('click', async () => {
+            const tab = await getActiveCourseraTab();
+            if (!tab) return;
+
+            switchToTab('tab-log');
+            setRunningState(true, "Lấy Cert");
+            log("🎓 Đang truy xuất thông tin chứng chỉ & link Verify cho FAP...");
+            chrome.tabs.sendMessage(tab.id, { action: "GET_CERT_INFO" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    log("❌ Hãy mở trang khóa học trên Coursera rồi thử lại.");
+                    setRunningState(false);
+                }
+            });
+        });
+    }
+
+    // --- COPY CERTIFICATE FOR FAP ---
+    if (copyCertBtn) {
+        copyCertBtn.addEventListener('click', async () => {
+            const url = certUrlInput ? certUrlInput.value : '';
+            if (!url) return;
+            try {
+                await navigator.clipboard.writeText(url);
+                const oldText = copyCertBtn.textContent;
+                copyCertBtn.textContent = "✅ Đã Copy!";
+                copyCertBtn.style.background = "#10b981";
+                setTimeout(() => {
+                    copyCertBtn.textContent = oldText;
+                    copyCertBtn.style.background = "";
+                }, 2000);
+                log("📋 Đã copy link nộp FAP vào Clipboard!");
+            } catch (e) {
+                if (certUrlInput) {
+                    certUrlInput.select();
+                    document.execCommand('copy');
+                    log("📋 Đã copy link vào Clipboard!");
+                }
+            }
+        });
+    }
+
     // --- 3. AUTO DISCUSSION ---
     if (discussionBtn) {
         discussionBtn.addEventListener('click', async () => {
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
+            setRunningState(true, "Discussion");
             log("💬 Đang gửi phản hồi thảo luận...");
             chrome.tabs.sendMessage(tab.id, { action: "AUTO_DISCUSSION" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở đúng trang thảo luận rồi thử lại.");
+                    setRunningState(false);
                 }
             });
         });
@@ -242,10 +361,12 @@ document.addEventListener('DOMContentLoaded', function () {
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
+            setRunningState(true, "Peer Submit");
             log("📝 Đang điền nội dung học thuật vào bài tập tự luận...");
             chrome.tabs.sendMessage(tab.id, { action: "AUTO_DO_ASSIGNMENT" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang nộp bài tập (Submit your assignment) rồi thử lại.");
+                    setRunningState(false);
                 }
             });
         });
@@ -258,10 +379,12 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!tab) return;
 
             const count = parseInt(gradeCountInput.value, 10) || 3;
+            setRunningState(true, "Peer Grade");
             log(`⭐ Bắt đầu chấm chéo ${count} bài với điểm tối đa...`);
             chrome.tabs.sendMessage(tab.id, { action: "AUTO_GRADE_PEER", count: count }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang chấm bài (Review your peers) rồi thử lại.");
+                    setRunningState(false);
                 }
             });
         });
@@ -300,10 +423,12 @@ document.addEventListener('DOMContentLoaded', function () {
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
+            setRunningState(true, "Cào đề");
             log("📋 Đang cào toàn bộ câu hỏi và tạo prompt chuẩn...");
             chrome.tabs.sendMessage(tab.id, { action: "COPY_QUIZ_PROMPT" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy chắc chắn bạn đang mở trang bài thi (Quiz Attempt)!");
+                    setRunningState(false);
                 }
             });
         });
@@ -321,10 +446,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            setRunningState(true, "Điền JSON");
             log("📥 Đang phân tích JSON và tự động tích đáp án...");
             chrome.tabs.sendMessage(tab.id, { action: "APPLY_QUIZ_ANSWERS", jsonAnswers: rawJson }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang bài thi rồi thử lại.");
+                    setRunningState(false);
                 }
             });
         });
@@ -337,6 +464,30 @@ document.addEventListener('DOMContentLoaded', function () {
         } else if (request.action === "FINISHED") {
             setRunningState(false);
             log("🏁 Tiến trình hoàn tất!");
+        } else if (request.action === "PROGRESS_UPDATE") {
+            if (progressContainer) {
+                progressContainer.style.display = 'block';
+            }
+            if (progressPercent) {
+                progressPercent.textContent = `${request.percent}%`;
+            }
+            if (progressFill) {
+                progressFill.style.width = `${request.percent}%`;
+            }
+            if (progressLabel && request.completed !== undefined && request.total !== undefined) {
+                progressLabel.textContent = `Tiến độ: ${request.completed}/${request.total} bài (${request.percent}%)`;
+            }
+            if (request.itemName && statusText) {
+                statusText.textContent = request.itemName.length > 22 
+                    ? request.itemName.substring(0, 20) + "..." 
+                    : request.itemName;
+            }
+        } else if (request.action === "CERT_FOUND") {
+            showCertBanner(request.verifyUrl, request.studentName);
+            chrome.storage.local.set({
+                savedCertUrl: request.verifyUrl,
+                savedCertName: request.studentName
+            });
         }
     });
 });

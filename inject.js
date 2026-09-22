@@ -48,7 +48,18 @@ const observer = new MutationObserver((mutations) => {
         }
     }
 });
-observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+const startObserver = () => {
+    const targetNode = document.body || document.documentElement;
+    if (targetNode) {
+        observer.observe(targetNode, { childList: true, subtree: true });
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            const node = document.body || document.documentElement;
+            if (node) observer.observe(node, { childList: true, subtree: true });
+        });
+    }
+};
+startObserver();
 
 // 3. Block underlying navigation attempts to launch the physical desktop app
 const blockIfCustomProtocol = (url) => {
@@ -80,17 +91,19 @@ window.location.replace = function(url) {
 };
 
 // Intercept location.href assignments
-const locationHrefDesc = Object.getOwnPropertyDescriptor(window.Location.prototype, 'href');
-if (locationHrefDesc && locationHrefDesc.set) {
-    const originalHrefSet = locationHrefDesc.set;
-    Object.defineProperty(window.Location.prototype, 'href', {
-        get: locationHrefDesc.get,
-        set: function(url) {
-            if (blockIfCustomProtocol(url)) return;
-            return originalHrefSet.call(this, url);
-        }
-    });
-}
+try {
+    const locationHrefDesc = Object.getOwnPropertyDescriptor(window.Location.prototype, 'href');
+    if (locationHrefDesc && locationHrefDesc.set) {
+        const originalHrefSet = locationHrefDesc.set;
+        Object.defineProperty(window.Location.prototype, 'href', {
+            get: locationHrefDesc.get,
+            set: function(url) {
+                if (blockIfCustomProtocol(url)) return;
+                return originalHrefSet.call(this, url);
+            }
+        });
+    }
+} catch (_) {}
 
 // Intercept click events on links
 document.addEventListener('click', function(e) {

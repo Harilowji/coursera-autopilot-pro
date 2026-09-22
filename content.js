@@ -1,14 +1,27 @@
 // ============================================================
-// Coursera Skipper Pro - Content Script v2.0
-// All-in-One: Skip Videos, Readings, Auto Peer, Discussion & AI Quiz Solver
+// Coursera Autopilot Pro - Content Script v2.2
+// All-in-One: Skip Videos, Readings, Progress Audit, FAP Cert Extractor,
+// Auto Peer Review, Auto Discussion & Multi-Provider AI Quiz Solver
 // ============================================================
 
 const BASE_URL = "/api/";
 
+// Helper to safely send runtime messages without throwing unhandled promise rejections
+function safeSendMessage(payload) {
+    try {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+            const p = chrome.runtime.sendMessage(payload);
+            if (p && typeof p.catch === 'function') {
+                p.catch(() => {});
+            }
+        }
+    } catch (_) {}
+}
+
 // Helper to log to popup & background
 function log(msg) {
-    console.log("[SkipperPro] " + msg);
-    chrome.runtime.sendMessage({ action: "LOG", message: msg });
+    console.log("[AutopilotPro] " + msg);
+    safeSendMessage({ action: "LOG", message: msg });
 }
 
 // Cookie helper
@@ -19,7 +32,7 @@ function getCookie(name) {
     return null;
 }
 
-// Randomizer helpers
+// Randomizer helper
 function getRandomItem(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -112,7 +125,7 @@ function extractQuizQuestions() {
 
     // Fallback: group by input ancestors
     if (questionBlocks.length === 0) {
-        const inputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+        const inputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], select'));
         const containerSet = new Set();
         inputs.forEach(inp => {
             const cont = inp.closest('fieldset, form, div[role="group"], div[class*="Question"], div[class*="question"]');
@@ -124,6 +137,7 @@ function extractQuizQuestions() {
     questionBlocks.forEach((qEl, qIndex) => {
         const radioInputs = Array.from(qEl.querySelectorAll('input[type="radio"], [role="radio"]'));
         const checkInputs = Array.from(qEl.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
+        const selectInputs = Array.from(qEl.querySelectorAll('select'));
         const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"]'));
 
         let qType = "single";
@@ -131,12 +145,15 @@ function extractQuizQuestions() {
         if (checkInputs.length > 0) {
             qType = "multiple";
             inputElements = checkInputs;
+        } else if (selectInputs.length > 0) {
+            qType = "dropdown";
+            inputElements = selectInputs;
         } else if (textInputs.length > 0 && radioInputs.length === 0) {
             qType = "text";
             inputElements = textInputs;
         }
 
-        if (inputElements.length === 0) return;
+        if (inputElements.length === 0 && selectInputs.length === 0) return;
 
         // Extract full question text
         let qText = "";
@@ -169,9 +186,34 @@ function extractQuizQuestions() {
 
         qText = qText.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
 
+        // Capture diagram / formula / image context
+        const imgs = qEl.querySelectorAll('img');
+        if (imgs.length > 0) {
+            const imgDescriptions = Array.from(imgs)
+                .map(img => img.alt || img.getAttribute('aria-label') || '')
+                .filter(t => t.trim().length > 0);
+            if (imgDescriptions.length > 0) {
+                qText += "\n[Diagrams/Formulas: " + imgDescriptions.join("; ") + "]";
+            }
+        }
+
         // Extract options
         const options = [];
-        if (qType !== "text") {
+        if (qType === "dropdown") {
+            const selEl = selectInputs[0];
+            const optElements = Array.from(selEl.options);
+            optElements.forEach((opt, oIndex) => {
+                if (opt.value && opt.text.trim()) {
+                    options.push({
+                        index: oIndex,
+                        text: opt.text.trim(),
+                        value: opt.value,
+                        element: selEl,
+                        clickTarget: selEl
+                    });
+                }
+            });
+        } else if (qType !== "text") {
             inputElements.forEach((inp, oIndex) => {
                 const parentOpt = inp.closest('label, div.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || inp.parentElement;
                 let optText = "";
@@ -216,7 +258,7 @@ function generateQuizPrompt(questions) {
     prompt += "RULES:\n";
     prompt += "- Keys are question numbers (\"1\", \"2\", ...).\n";
     prompt += "- Values are arrays of 0-based option index numbers that represent the correct choices.\n";
-    prompt += "- For 'Single Choice': select exactly one index (e.g. [0]).\n";
+    prompt += "- For 'Single Choice' or 'Dropdown': select exactly one index (e.g. [0]).\n";
     prompt += "- For 'Multiple Choice': select all correct indices (e.g. [1, 2]).\n";
     prompt += "- Return ONLY raw JSON without explanation.\n\n";
     prompt += "=== QUIZ QUESTIONS ===\n\n";
@@ -236,11 +278,11 @@ function generateQuizPrompt(questions) {
     return prompt;
 }
 
-function applyQuizAnswers(parsedAnswers, questions) {
+async function applyQuizAnswers(parsedAnswers, questions) {
     let answersMap = parsedAnswers.answers || parsedAnswers;
     let filledCount = 0;
 
-    questions.forEach(q => {
+    for (const q of questions) {
         let key = String(q.displayNumber);
         let selectedIndices = answersMap[key] !== undefined ? answersMap[key] : answersMap[String(q.id)];
 
@@ -249,26 +291,61 @@ function applyQuizAnswers(parsedAnswers, questions) {
                 selectedIndices = [selectedIndices];
             }
 
-            selectedIndices.forEach(idx => {
-                const intIdx = parseInt(idx, 10);
-                const opt = q.options.find(o => o.index === intIdx);
-                if (opt) {
-                    try {
-                        opt.clickTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        opt.clickTarget.click();
-                        if (opt.element && !opt.element.checked) {
-                            opt.element.checked = true;
-                            opt.element.dispatchEvent(new Event('input', { bubbles: true }));
-                            opt.element.dispatchEvent(new Event('change', { bubbles: true }));
+            if (q.type === "dropdown" && q.options.length > 0) {
+                const targetIdx = parseInt(selectedIndices[0], 10);
+                const selEl = q.options[0].element;
+                if (selEl && targetIdx >= 0 && targetIdx < selEl.options.length) {
+                    selEl.selectedIndex = targetIdx;
+                    selEl.dispatchEvent(new Event('change', { bubbles: true }));
+                    filledCount++;
+                }
+            } else {
+                for (const idx of selectedIndices) {
+                    const intIdx = parseInt(idx, 10);
+                    const opt = q.options.find(o => o.index === intIdx);
+                    if (opt) {
+                        try {
+                            opt.clickTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            opt.clickTarget.click();
+                            if (opt.element && !opt.element.checked) {
+                                opt.element.checked = true;
+                                opt.element.dispatchEvent(new Event('input', { bubbles: true }));
+                                opt.element.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                            // Subtle visual green glow to give user confidence
+                            opt.clickTarget.style.transition = 'all 0.3s ease';
+                            opt.clickTarget.style.outline = '2px solid #10b981';
+                            opt.clickTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
+                            filledCount++;
+                        } catch (e) {
+                            console.warn("Click option error:", e);
                         }
-                        filledCount++;
-                    } catch (e) {
-                        console.warn("Click option error:", e);
                     }
                 }
-            });
+            }
+            // Human-like micro-delay between answering questions (180ms - 400ms) to evade client telemetry
+            await new Promise(r => setTimeout(r, 180 + Math.floor(Math.random() * 220)));
         }
-    });
+    }
+
+    // Auto-check Coursera Honor Code agreement checkbox if present
+    try {
+        const honorBoxes = document.querySelectorAll(
+            '#agreement-checkbox-base, input[data-testid="honor-code-checkbox"], input[type="checkbox"][name*="honor"], input[type="checkbox"][name*="agreement"]'
+        );
+        honorBoxes.forEach(box => {
+            if (!box.checked) {
+                box.click();
+                box.checked = true;
+                box.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+    } catch (_) {}
+
+    // Smooth scroll down to submit button area
+    try {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    } catch (_) {}
 
     return filledCount;
 }
@@ -285,6 +362,7 @@ class SkiperaJS {
         this.csrfToken = getCookie("CSRF3-Token") || getCookie("csrf3-token");
         this.isStopped = false;
         this.mode = mode; // 'safe' or 'turbo'
+        this.completedIds = new Set();
 
         if (!this.csrfToken) {
             log("⚠️ CẢNH BÁO: Không tìm thấy cookie CSRF3-Token! Hãy chắc chắn bạn đã đăng nhập.");
@@ -310,16 +388,53 @@ class SkiperaJS {
             const response = await fetch(BASE_URL + "adminUserPermissions.v1?q=my", {
                 headers: this.getHeaders()
             });
-            if (!response.ok) return false;
-            const json = await response.json();
-            if (json.elements && json.elements[0] && json.elements[0].id) {
-                this.userId = json.elements[0].id;
-                return true;
+            if (response.ok) {
+                const json = await response.json();
+                if (json.elements && json.elements[0] && json.elements[0].id) {
+                    this.userId = json.elements[0].id;
+                    return true;
+                }
             }
-            return false;
-        } catch (e) {
-            return false;
+        } catch (_) {}
+
+        // Fallback 1: externalBasicProfiles.v1?q=me
+        try {
+            const response2 = await fetch(BASE_URL + "externalBasicProfiles.v1?q=me", {
+                headers: this.getHeaders()
+            });
+            if (response2.ok) {
+                const json2 = await response2.json();
+                if (json2.elements && json2.elements[0] && json2.elements[0].id) {
+                    this.userId = json2.elements[0].id;
+                    return true;
+                }
+            }
+        } catch (_) {}
+
+        // Fallback 2: cookie _coursera_user_id
+        const cookieId = getCookie("_coursera_user_id") || getCookie("coursera_user_id");
+        if (cookieId) {
+            this.userId = cookieId;
+            return true;
         }
+
+        return false;
+    }
+
+    async getCompletedItemIds() {
+        try {
+            const url = `${BASE_URL}onDemandCourseProgresses.v1/${this.userId}~${this.courseId}`;
+            const res = await fetch(url, { headers: this.getHeaders() });
+            if (res.ok) {
+                const json = await res.json();
+                if (json.elements && json.elements[0] && json.elements[0].completedItemIds) {
+                    return new Set(json.elements[0].completedItemIds);
+                }
+            }
+        } catch (e) {
+            console.warn("Could not fetch completedItemIds:", e);
+        }
+        return new Set();
     }
 
     async getCourse(slug) {
@@ -340,28 +455,64 @@ class SkiperaJS {
             const json = await response.json();
             if (!json.elements || json.elements.length === 0) {
                 log("❌ Không tìm thấy thông tin khóa học.");
+                safeSendMessage({ action: "FINISHED" });
                 return;
             }
             this.courseId = json.elements[0].id;
             log(`📌 Course ID: ${this.courseId} | Chế độ: ${this.mode === 'safe' ? '🛡️ Safe Farm' : '⚡ Turbo'}`);
 
-            const items = json.linked["onDemandCourseMaterialItems.v2"] || [];
-            log(`📚 Tìm thấy tổng cộng ${items.length} bài học.`);
+            // Fetch already completed items to prevent redundant API calls
+            this.completedIds = await this.getCompletedItemIds();
+            log(`✅ Phát hiện ${this.completedIds.size} bài đã hoàn thành trước đó (sẽ tự động bỏ qua).`);
 
-            let count = 0;
+            const items = json.linked["onDemandCourseMaterialItems.v2"] || [];
+            log(`📚 Tổng cộng ${items.length} bài học trong khóa.`);
+
+            let processedCount = 0;
+            let skippedAlreadyDone = 0;
+
+            // Send initial progress update
+            const initialDone = this.completedIds.size;
+            const initPct = items.length > 0 ? ((initialDone / items.length) * 100).toFixed(0) : 0;
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                percent: initPct,
+                completed: initialDone,
+                total: items.length,
+                itemName: "Bắt đầu quét..."
+            });
+
             for (const item of items) {
                 if (this.isStopped) {
                     log("⏹ Đã dừng theo yêu cầu.");
                     break;
                 }
+
+                // Check if already completed
+                if (this.completedIds.has(item.id)) {
+                    skippedAlreadyDone++;
+                    continue;
+                }
+
                 const typeName = item.contentSummary ? item.contentSummary.typeName : "";
                 if (typeName === "lecture") {
-                    log(`[${++count}/${items.length}] 🎬 Video: ${item.name}`);
+                    log(`[${++processedCount}] 🎬 Video: ${item.name}`);
                     await this.watchItem(item);
-                } else if (typeName === "supplement") {
-                    log(`[${++count}/${items.length}] 📖 Reading: ${item.name}`);
+                } else if (typeName === "supplement" || typeName === "ungradedWidget") {
+                    log(`[${++processedCount}] 📖 Reading: ${item.name}`);
                     await this.readItem(item.id);
                 }
+
+                // Send live progress update to popup
+                const currentDone = skippedAlreadyDone + processedCount;
+                const pct = items.length > 0 ? ((currentDone / items.length) * 100).toFixed(0) : 0;
+                safeSendMessage({
+                    action: "PROGRESS_UPDATE",
+                    percent: pct,
+                    completed: currentDone,
+                    total: items.length,
+                    itemName: item.name
+                });
 
                 // Delay between items based on mode
                 if (this.mode === 'safe') {
@@ -373,12 +524,158 @@ class SkiperaJS {
             }
 
             if (!this.isStopped) {
-                log("🎉 Quá trình Skip khóa học hoàn tất 100%!");
+                log(`🎉 Hoàn tất! Đã xử lý ${processedCount} bài học mới (${skippedAlreadyDone} bài cũ đã bỏ qua).`);
+                // Auto check certificate
+                await this.getCertificateInfo();
             }
-            chrome.runtime.sendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED" });
         } catch (err) {
             log(`❌ Lỗi khi quét khóa học: ${err.message}`);
-            chrome.runtime.sendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED" });
+        }
+    }
+
+    // --- AUDIT TIẾN ĐỘ KHÓA HỌC (TÌM BÀI SÓT / 99% BUG) ---
+    async auditCourse(slug) {
+        this.slug = slug;
+        const ok = await this.getUserId();
+        if (!ok) {
+            log("❌ Không lấy được thông tin tài khoản.");
+            safeSendMessage({ action: "FINISHED" });
+            return;
+        }
+
+        const params = new URLSearchParams({
+            "q": "slug",
+            "slug": slug,
+            "includes": "modules,lessons,items",
+            "fields": "moduleIds,onDemandCourseMaterialModules.v1(name,slug,lessonIds),onDemandCourseMaterialLessons.v1(name,slug,elementIds),onDemandCourseMaterialItems.v2(name,slug,timeCommitment,contentSummary)",
+            "showLockedItems": "true"
+        });
+
+        try {
+            log("🔍 Đang phân tích tiến độ thực tế toàn bộ khóa học...");
+            const res = await fetch(BASE_URL + "onDemandCourseMaterials.v2/?" + params.toString(), {
+                headers: this.getHeaders()
+            });
+            const json = await res.json();
+            if (!json.elements || json.elements.length === 0) {
+                log("❌ Không tìm thấy thông tin khóa học.");
+                safeSendMessage({ action: "FINISHED" });
+                return;
+            }
+            this.courseId = json.elements[0].id;
+            const items = json.linked["onDemandCourseMaterialItems.v2"] || [];
+            const completedIds = await this.getCompletedItemIds();
+
+            const uncompleted = [];
+            items.forEach(item => {
+                const isDone = completedIds.has(item.id);
+                if (!isDone) {
+                    const type = item.contentSummary ? item.contentSummary.typeName : "unknown";
+                    uncompleted.push({ name: item.name, type: type, id: item.id });
+                }
+            });
+
+            const completedCount = items.length - uncompleted.length;
+            const pct = items.length > 0 ? ((completedCount / items.length) * 100).toFixed(1) : 0;
+
+            log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log(`📊 KẾT QUẢ KIỂM TRA TIẾN ĐỘ:`);
+            log(`• Tổng số bài học: ${items.length}`);
+            log(`• Đã hoàn thành: ${completedCount}/${items.length} (${pct}%)`);
+            
+            if (uncompleted.length === 0) {
+                log(`🎉 KHÓA HỌC ĐÃ HOÀN THÀNH 100%! Bạn đủ điều kiện nhận chứng chỉ.`);
+                await this.getCertificateInfo();
+            } else {
+                log(`⚠️ CÒN ${uncompleted.length} BÀI CHƯA HOÀN THÀNH:`);
+                uncompleted.slice(0, 10).forEach((u, i) => {
+                    log(`  ${i + 1}. [${u.type.toUpperCase()}] ${u.name}`);
+                });
+                if (uncompleted.length > 10) {
+                    log(`  ... và ${uncompleted.length - 10} bài khác.`);
+                }
+            }
+            log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                percent: Math.round(pct),
+                completed: completedCount,
+                total: items.length,
+                itemName: uncompleted.length === 0 ? "100% Hoàn tất!" : `Còn ${uncompleted.length} bài chưa xong`
+            });
+            safeSendMessage({ action: "FINISHED" });
+        } catch (e) {
+            log("❌ Lỗi kiểm tra tiến độ: " + e.message);
+            safeSendMessage({ action: "FINISHED" });
+        }
+    }
+
+    // --- TRUY XUẤT LINK VERIFY CHỨNG CHỈ CHO FAP ---
+    async getCertificateInfo() {
+        try {
+            log("🎓 Đang truy xuất thông tin chứng chỉ & link Verify...");
+            const url = `${BASE_URL}openCourseMemberships.v1/${this.userId}~${this.courseId}`;
+            const res = await fetch(url, { headers: this.getHeaders() });
+            if (res.ok) {
+                const json = await res.json();
+                const elem = json.elements ? json.elements[0] : json;
+                let certCode = elem ? (elem.certificateCode || elem.v1CertificateCode) : null;
+                
+                // Profile name
+                let fullName = "Học viên Coursera";
+                try {
+                    const profileRes = await fetch(`${BASE_URL}externalBasicProfiles.v1?q=me`, { headers: this.getHeaders() });
+                    if (profileRes.ok) {
+                        const profJson = await profileRes.json();
+                        if (profJson.elements && profJson.elements[0]) {
+                            fullName = profJson.elements[0].fullName || profJson.elements[0].name;
+                        }
+                    }
+                } catch (_) {}
+
+                if (!certCode) {
+                    // Fallback 1: query certificateAccomplishments.v1
+                    try {
+                        const certRes = await fetch(`${BASE_URL}certificateAccomplishments.v1?q=my`, { headers: this.getHeaders() });
+                        if (certRes.ok) {
+                            const certJson = await certRes.json();
+                            if (certJson.elements) {
+                                const matchCert = certJson.elements.find(c => c.courseId === this.courseId);
+                                if (matchCert && matchCert.id) {
+                                    certCode = matchCert.id;
+                                }
+                            }
+                        }
+                    } catch (_) {}
+                }
+
+                if (certCode) {
+                    const verifyUrl = `https://www.coursera.org/verify/${certCode}`;
+                    log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+                    log(`✅ LINK VERIFY CHỨNG CHỈ (NỘP FAP):`);
+                    log(`🔗 ${verifyUrl}`);
+                    log(`👤 Tên hiển thị trên bằng: "${fullName}"`);
+                    log(`👉 Hãy kiểm tra kỹ tên trên bằng có khớp Họ Tên trên FAP không!`);
+                    await copyTextToClipboard(verifyUrl);
+                    log(`📋 (Đã tự động copy link verify vào Clipboard!)`);
+                    log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+                    safeSendMessage({
+                        action: "CERT_FOUND",
+                        verifyUrl: verifyUrl,
+                        studentName: fullName,
+                        certCode: certCode
+                    });
+                    safeSendMessage({ action: "FINISHED" });
+                    return;
+                }
+            }
+            log("ℹ️ Môn học chưa cấp Certificate Code. Hãy chắc chắn bạn đã Passed tất cả Graded Quizzes và Peer Reviews!");
+            safeSendMessage({ action: "FINISHED" });
+        } catch (e) {
+            console.warn("Cert fetch error:", e);
+            safeSendMessage({ action: "FINISHED" });
         }
     }
 
@@ -543,6 +840,7 @@ class SkiperaJS {
         } else {
             log("⚠️ Không tìm thấy nút Submit hoặc nút đang bị khóa.");
         }
+        safeSendMessage({ action: "FINISHED" });
     }
 
     // --- AUTO GRADE PEER ---
@@ -682,11 +980,28 @@ class SkiperaJS {
         if (gradedCount >= expectedCount) {
             log(`🎉 Hoàn thành xuất sắc chấm chéo ${gradedCount} bài!`);
         }
+        safeSendMessage({ action: "FINISHED" });
     }
 
     // --- AUTO DISCUSSION ---
     async autoFillDiscussion() {
-        const editor = document.querySelector('div[data-slate-editor="true"]') || document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
+        let editor = document.querySelector('div[data-slate-editor="true"]') || document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
+        
+        if (!editor) {
+            // Check if there is a trigger button to open the reply form
+            const buttons = Array.from(document.querySelectorAll('button, a'));
+            const triggerBtn = buttons.find(b => {
+                const t = b.textContent.trim().toLowerCase();
+                return ['reply to prompt', 'start a conversation', 'add a response', 'reply', 'phản hồi', 'trả lời'].some(k => t.includes(k));
+            });
+            if (triggerBtn) {
+                log("ℹ️ Đang mở form phản hồi thảo luận...");
+                triggerBtn.click();
+                await new Promise(r => setTimeout(r, 1200));
+                editor = document.querySelector('div[data-slate-editor="true"]') || document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
+            }
+        }
+
         if (!editor) {
             log("❌ Không tìm thấy ô nhập phản hồi thảo luận.");
             return;
@@ -729,15 +1044,32 @@ class SkiperaJS {
         } else {
             log("⚠️ Không tìm thấy nút Post/Reply.");
         }
+        safeSendMessage({ action: "FINISHED" });
     }
 
     // --- AUTO DO QUIZ (BATCH AI CALL) ---
     async autoDoQuiz(provider, apiKey) {
         log(`🧠 Bắt đầu quét câu hỏi đề thi...`);
-        const questions = extractQuizQuestions();
+        let questions = extractQuizQuestions();
+
+        if (questions.length === 0) {
+            // Check if user is on the cover page with Start/Resume/Retake button
+            const buttons = Array.from(document.querySelectorAll('button, a'));
+            const startBtn = buttons.find(b => {
+                const t = b.textContent.trim().toLowerCase();
+                return ['start assignment', 'start attempt', 'resume', 'retake', 'start quiz', 'take quiz', 'bắt đầu'].some(k => t.includes(k));
+            });
+            if (startBtn) {
+                log("ℹ️ Phát hiện nút vào thi. Đang tự động mở bài thi...");
+                startBtn.click();
+                await new Promise(r => setTimeout(r, 3500));
+                questions = extractQuizQuestions();
+            }
+        }
 
         if (questions.length === 0) {
             log("❌ Không tìm thấy câu hỏi trắc nghiệm nào trên trang hiện tại!");
+            safeSendMessage({ action: "FINISHED" });
             return;
         }
 
@@ -748,7 +1080,6 @@ class SkiperaJS {
             let aiResponseJson = null;
 
             if (provider === 'gemini') {
-                // FIXED: using gemini-2.0-flash (fast, highly accurate, free)
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
                 const res = await fetch(url, {
                     method: 'POST',
@@ -767,7 +1098,6 @@ class SkiperaJS {
                 aiResponseJson = extractJsonFromText(text);
 
             } else if (provider === 'groq') {
-                // ADDED: Groq Llama 3.3 70B (free, sub-second response)
                 const url = `https://api.groq.com/openai/v1/chat/completions`;
                 const res = await fetch(url, {
                     method: 'POST',
@@ -790,7 +1120,6 @@ class SkiperaJS {
                 aiResponseJson = extractJsonFromText(json.choices[0].message.content);
 
             } else if (provider === 'openai') {
-                // OpenAI GPT-4o Mini
                 const url = `https://api.openai.com/v1/chat/completions`;
                 const res = await fetch(url, {
                     method: 'POST',
@@ -818,23 +1147,38 @@ class SkiperaJS {
             }
 
             log("🎯 Đã nhận đáp án từ AI! Tiến hành tích chọn trên giao diện bài thi...");
-            const filled = applyQuizAnswers(aiResponseJson, questions);
-            log(`🎉 Hoàn thành! Đã tự động điền đáp án cho ${filled} lựa chọn.`);
-            chrome.runtime.sendMessage({ action: "FINISHED" });
+            const filled = await applyQuizAnswers(aiResponseJson, questions);
+            log(`🎉 Hoàn thành! Đã tự động điền đáp án cho ${filled} lựa chọn (và tự tích cam kết danh dự).`);
+            safeSendMessage({ action: "FINISHED" });
 
         } catch (e) {
             log(`❌ Lỗi gọi AI: ${e.message}`);
-            chrome.runtime.sendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED" });
         }
     }
 
     // --- ZERO-KEY MODE: COPY PROMPT ---
     async copyQuizPrompt() {
         log("📋 Đang cào toàn bộ câu hỏi đề thi...");
-        const questions = extractQuizQuestions();
+        let questions = extractQuizQuestions();
+
+        if (questions.length === 0) {
+            const buttons = Array.from(document.querySelectorAll('button, a'));
+            const startBtn = buttons.find(b => {
+                const t = b.textContent.trim().toLowerCase();
+                return ['start assignment', 'start attempt', 'resume', 'retake', 'start quiz', 'take quiz', 'bắt đầu'].some(k => t.includes(k));
+            });
+            if (startBtn) {
+                log("ℹ️ Phát hiện nút vào thi. Đang tự động mở bài thi...");
+                startBtn.click();
+                await new Promise(r => setTimeout(r, 3500));
+                questions = extractQuizQuestions();
+            }
+        }
 
         if (questions.length === 0) {
             log("❌ Không tìm thấy câu hỏi nào! Hãy đảm bảo bạn đang ở trang bài thi (Quiz Attempt).");
+            safeSendMessage({ action: "FINISHED" });
             return;
         }
 
@@ -847,22 +1191,26 @@ class SkiperaJS {
         } else {
             log("⚠️ Không thể tự động copy vào clipboard. Hãy kiểm tra quyền trình duyệt.");
         }
+        safeSendMessage({ action: "FINISHED" });
     }
 
     // --- ZERO-KEY MODE: APPLY JSON ANSWERS ---
-    applyAnswersFromJson(jsonString) {
+    async applyAnswersFromJson(jsonString) {
         try {
             const parsed = extractJsonFromText(jsonString);
             if (!parsed) {
                 log("❌ Chuỗi JSON không hợp lệ! Hãy chắc chắn bạn đã copy đúng định dạng từ AI.");
+                safeSendMessage({ action: "FINISHED" });
                 return;
             }
 
             const questions = extractQuizQuestions();
-            const count = applyQuizAnswers(parsed, questions);
+            const count = await applyQuizAnswers(parsed, questions);
             log(`🎉 Đã điền thành công ${count} đáp án từ kết quả JSON của bạn!`);
+            safeSendMessage({ action: "FINISHED" });
         } catch (e) {
             log(`❌ Lỗi áp dụng JSON: ${e.message}`);
+            safeSendMessage({ action: "FINISHED" });
         }
     }
 }
@@ -872,7 +1220,8 @@ class SkiperaJS {
 // ============================================================
 
 function getSlugFromUrl(url) {
-    const match = url.match(/learn\/([^\/]+)/);
+    if (!url) return null;
+    const match = url.match(/learn\/([^\/\?#]+)/);
     return match ? match[1] : null;
 }
 
@@ -884,7 +1233,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!slug) {
             log("❌ Không nhận diện được slug khóa học. Hãy mở trang chủ khóa học (/home/welcome hoặc /home/week/1)!");
             sendResponse({ status: "error" });
-            return;
+            safeSendMessage({ action: "FINISHED" });
+            return true;
         }
         activeSkipper = new SkiperaJS(request.mode || 'safe');
         activeSkipper.getUserId().then(success => {
@@ -892,13 +1242,58 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 activeSkipper.getCourse(slug);
             } else {
                 log("❌ Không lấy được User ID. Hãy chắc chắn bạn đã đăng nhập Coursera!");
+                safeSendMessage({ action: "FINISHED" });
             }
+        }).catch(() => {
+            safeSendMessage({ action: "FINISHED" });
         });
         sendResponse({ status: "started" });
+    } else if (request.action === "AUDIT_COURSE") {
+        const slug = getSlugFromUrl(window.location.href);
+        if (!slug) {
+            log("❌ Không nhận diện được slug khóa học. Hãy mở trang chủ khóa học!");
+            sendResponse({ status: "error" });
+            safeSendMessage({ action: "FINISHED" });
+            return true;
+        }
+        activeSkipper = new SkiperaJS();
+        activeSkipper.auditCourse(slug);
+        sendResponse({ status: "auditing" });
+    } else if (request.action === "GET_CERT_INFO") {
+        const slug = getSlugFromUrl(window.location.href);
+        if (!slug) {
+            log("❌ Hãy mở trang khóa học trên Coursera!");
+            sendResponse({ status: "error" });
+            safeSendMessage({ action: "FINISHED" });
+            return true;
+        }
+        activeSkipper = new SkiperaJS();
+        activeSkipper.slug = slug;
+        activeSkipper.getUserId().then(async ok => {
+            if (ok) {
+                // First get courseId
+                const params = new URLSearchParams({ "q": "slug", "slug": slug });
+                const res = await fetch(BASE_URL + "onDemandCourseMaterials.v2/?" + params.toString(), { headers: activeSkipper.getHeaders() });
+                const json = await res.json();
+                if (json.elements && json.elements[0]) {
+                    activeSkipper.courseId = json.elements[0].id;
+                    await activeSkipper.getCertificateInfo();
+                } else {
+                    safeSendMessage({ action: "FINISHED" });
+                }
+            } else {
+                safeSendMessage({ action: "FINISHED" });
+            }
+        }).catch(() => {
+            safeSendMessage({ action: "FINISHED" });
+        });
+        sendResponse({ status: "getting_cert" });
     } else if (request.action === "STOP_SKIPPING") {
         if (activeSkipper) {
             activeSkipper.stop();
             sendResponse({ status: "stopped" });
+        } else {
+            sendResponse({ status: "not_running" });
         }
     } else if (request.action === "AUTO_DISCUSSION") {
         const skipper = activeSkipper || new SkiperaJS();
@@ -924,6 +1319,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const skipper = activeSkipper || new SkiperaJS();
         skipper.applyAnswersFromJson(request.jsonAnswers);
         sendResponse({ status: "processing" });
+    } else {
+        sendResponse({ status: "unknown_action" });
     }
     return true;
 });
