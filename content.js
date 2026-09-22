@@ -1,5 +1,5 @@
 // ============================================================
-// Coursera Autopilot Pro - Content Script v2.2
+// Coursera Autopilot Pro - Content Script v2.3
 // All-in-One: Skip Videos, Readings, Progress Audit, FAP Cert Extractor,
 // Auto Peer Review, Auto Discussion & Multi-Provider AI Quiz Solver
 // ============================================================
@@ -1492,7 +1492,7 @@ class SkiperaJS {
 
     // --- AUTO DO QUIZ (BATCH AI CALL) ---
     async autoDoQuiz(provider, apiKey) {
-        log(`🧠 Bắt đầu quét câu hỏi đề thi...`);
+        log(`🧠 [v2.3 Engine] Bắt đầu quét câu hỏi đề thi...`);
         let questions = extractQuizQuestions();
 
         if (questions.length === 0) {

@@ -417,7 +417,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     log("❌ Hãy mở trang làm bài thi (Quiz Attempt) rồi thử lại.");
                     setRunningState(false);
                 } else {
-                    log("Đang phân tích và xử lý câu hỏi...");
+                    log("🤖 [v2.3] Đang phân tích và xử lý câu hỏi...");
                 }
             });
         });

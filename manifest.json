@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Coursera Autopilot Pro",
-    "version": "2.2",
+    "version": "2.3",
     "description": "All-in-one automation suite for Coursera: Safe-Skip, Smart AI Quiz & Peer Review.",
     "permissions": [
         "activeTab",

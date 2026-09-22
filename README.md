@@ -1,8 +1,8 @@
-# 🚀 Coursera Autopilot Pro v2.2
+# 🚀 Coursera Autopilot Pro v2.3
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.2-blue.svg?style=flat-square)
+![Version](https://img.shields.io/badge/version-2.3-blue.svg?style=flat-square)
 ![Manifest](https://img.shields.io/badge/manifest-v3-success.svg?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-purple.svg?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Chrome%20%7C%20Edge%20%7C%20Brave-orange.svg?style=flat-square)
@@ -49,7 +49,7 @@ Giao diện tinh gọn chuẩn Linear / Raycast với 4 chủ đề đổi màu 
 
 ## 📊 Bảng So Sánh Với Bản Gốc
 
-| Tính năng | Bản gốc v1.0 | Coursera Autopilot Pro v2.2 |
+| Tính năng | Bản gốc v1.0 | Coursera Autopilot Pro v2.3 |
 | :--- | :--- | :--- |
 | **Giao diện** | Thô sơ, chữ nghĩa rườm rà | Hiện đại, tối giản, hỗ trợ 4 Theme, thanh % tiến độ |
 | **Cơ chế Skip** | Bắn spam cả bài cũ (dễ dính 429) | Cache bài đã làm, tùy chọn Safe Mode có Jitter |
