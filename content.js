@@ -1597,6 +1597,8 @@ class SkiperaJS {
 
     // --- CALL AI API WITH MODEL FALLBACK CHAINS ---
     async callAiQuizSolver(provider, apiKey, prompt) {
+        apiKey = (apiKey || '').trim();
+
         // Auto-correct provider based on key format if user mismatched them
         if (apiKey.startsWith('gsk_') && provider !== 'groq') {
             log("ℹ️ Nhận diện khóa Groq (gsk_...), tự động chuyển sang Groq.");
@@ -1610,10 +1612,11 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Priority fallback chain: Google recently deprecated 2.0 and requests 3.6-flash
+            // Priority fallback chain with latest models
             const models = [
-                'gemini-3.6-flash',
                 'gemini-3.8-flash',
+                'gemini-3.6-flash',
+                'gemini-3.5-flash-lite',
                 'gemini-2.5-flash',
                 'gemini-1.5-flash',
                 'gemini-1.5-flash-latest'
@@ -1630,8 +1633,16 @@ class SkiperaJS {
                             contents: [{ parts: [{ text: prompt }] }],
                             generationConfig: {
                                 response_mime_type: "application/json",
-                                temperature: 0.1
-                            }
+                                temperature: 0.1,
+                                maxOutputTokens: 8192
+                            },
+                            safetySettings: [
+                                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+                                { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
+                            ]
                         })
                     });
                     const json = await res.json();
@@ -1649,8 +1660,23 @@ class SkiperaJS {
                         lastError = new Error(errMsg);
                         continue;
                     }
-                    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (!text) throw new Error("Gemini không trả về văn bản đáp án.");
+
+                    const candidate = json.candidates?.[0];
+                    if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+                        console.warn(`Gemini candidate finishReason: ${candidate.finishReason}`);
+                        if (candidate.finishReason === 'SAFETY') {
+                            throw new Error("Đề thi bị bộ lọc an toàn Google Gemini chặn (SAFETY). Bạn nên chuyển sang Groq hoặc Zero-Key!");
+                        }
+                    }
+
+                    const text = candidate?.content?.parts?.[0]?.text;
+                    if (!text) {
+                        const blockReason = json.promptFeedback?.blockReason;
+                        if (blockReason) {
+                            throw new Error(`Đề thi bị Google chặn: ${blockReason}. Hãy chuyển sang Groq hoặc Zero-Key!`);
+                        }
+                        throw new Error("Gemini không trả về văn bản đáp án.");
+                    }
                     return extractJsonFromText(text);
                 } catch (err) {
                     lastError = err;
@@ -1683,7 +1709,8 @@ class SkiperaJS {
                                 { role: "user", content: prompt }
                             ],
                             response_format: { type: "json_object" },
-                            temperature: 0.1
+                            temperature: 0.1,
+                            max_tokens: 8192
                         })
                     });
                     const json = await res.json();
@@ -1726,7 +1753,8 @@ class SkiperaJS {
                         { role: "user", content: prompt }
                     ],
                     response_format: { type: "json_object" },
-                    temperature: 0.1
+                    temperature: 0.1,
+                    max_tokens: 8192
                 })
             });
             const json = await res.json();
