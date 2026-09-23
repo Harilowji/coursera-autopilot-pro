@@ -99,6 +99,11 @@ document.addEventListener('DOMContentLoaded', function () {
             hint: 'Groq Cloud Console (Miễn phí, Llama 3.3)',
             placeholder: 'Dán Groq API Key (gsk_...)'
         },
+        'openrouter': {
+            url: 'https://openrouter.ai/keys',
+            hint: 'OpenRouter (Hỗ trợ 300+ Model)',
+            placeholder: 'Dán OpenRouter Key (sk-or-...)'
+        },
         'openai': {
             url: 'https://platform.openai.com/api-keys',
             hint: 'OpenAI Developer Console',
@@ -136,7 +141,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // --- Load Saved Settings ---
-    chrome.storage.local.get(['aiProvider', 'apiKey_gemini', 'apiKey_groq', 'apiKey_openai', 'farmMode', 'gradeCount'], (result) => {
+    chrome.storage.local.get(['aiProvider', 'apiKey_gemini', 'apiKey_groq', 'apiKey_openrouter', 'apiKey_openai', 'farmMode', 'gradeCount'], (result) => {
         if (result.aiProvider && aiProviderSelect) {
             aiProviderSelect.value = result.aiProvider;
         }

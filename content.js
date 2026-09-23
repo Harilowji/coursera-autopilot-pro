@@ -1600,15 +1600,18 @@ class SkiperaJS {
         apiKey = (apiKey || '').trim();
 
         // Auto-correct provider based on key format if user mismatched them
-        if (apiKey.startsWith('gsk_') && provider !== 'groq') {
+        if (apiKey.startsWith('sk-or-')) {
+            log("ℹ️ Nhận diện khóa OpenRouter (sk-or-...), tự động chuyển sang OpenRouter.");
+            provider = 'openrouter';
+        } else if (apiKey.startsWith('gsk_') && provider !== 'groq') {
             log("ℹ️ Nhận diện khóa Groq (gsk_...), tự động chuyển sang Groq.");
             provider = 'groq';
-        } else if (apiKey.startsWith('sk-') && provider !== 'openai') {
-            log("ℹ️ Nhận diện khóa OpenAI (sk-...), tự động chuyển sang OpenAI.");
-            provider = 'openai';
         } else if (apiKey.startsWith('AIzaSy') && provider !== 'gemini') {
             log("ℹ️ Nhận diện khóa Google AI Studio, tự động chuyển sang Gemini.");
             provider = 'gemini';
+        } else if (apiKey.startsWith('sk-') && provider !== 'openai' && provider !== 'openrouter') {
+            log("ℹ️ Nhận diện khóa OpenAI (sk-...), tự động chuyển sang OpenAI.");
+            provider = 'openai';
         }
 
         if (provider === 'gemini') {
@@ -1736,6 +1739,61 @@ class SkiperaJS {
                 }
             }
             throw lastError || new Error("Không thể kết nối tới Groq API.");
+
+        } else if (provider === 'openrouter') {
+            const models = [
+                'google/gemini-2.0-flash-001',
+                'meta-llama/llama-3.3-70b-instruct',
+                'deepseek/deepseek-chat',
+                'google/gemini-flash-1.5'
+            ];
+            let lastError = null;
+            for (const model of models) {
+                try {
+                    log(`🌐 Đang kết nối tới OpenRouter (${model})...`);
+                    const url = `https://openrouter.ai/api/v1/chat/completions`;
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`,
+                            'HTTP-Referer': 'https://coursera.org',
+                            'X-Title': 'Coursera Autopilot Pro'
+                        },
+                        body: JSON.stringify({
+                            model: model,
+                            messages: [
+                                { role: "system", content: "You are an expert academic assistant solving Coursera quizzes with 100% accuracy. Respond only with JSON." },
+                                { role: "user", content: prompt }
+                            ],
+                            response_format: { type: "json_object" },
+                            temperature: 0.1,
+                            max_tokens: 8192
+                        })
+                    });
+                    const json = await res.json();
+                    if (!res.ok) {
+                        const errMsg = json.error?.message || `Lỗi HTTP ${res.status}`;
+                        if (errMsg.toLowerCase().includes('invalid_api_key') || errMsg.toLowerCase().includes('unauthorized') || res.status === 401) {
+                            throw new Error("API Key OpenRouter không hợp lệ hoặc chưa được xác thực.");
+                        }
+                        console.warn(`OpenRouter model ${model} error (${errMsg}), thử model tiếp theo...`);
+                        lastError = new Error(errMsg);
+                        continue;
+                    }
+                    const text = json.choices?.[0]?.message?.content;
+                    if (!text) throw new Error("OpenRouter không trả về nội dung đáp án.");
+                    return extractJsonFromText(text);
+                } catch (err) {
+                    lastError = err;
+                    if (err.message && err.message.includes('API Key OpenRouter không hợp lệ')) {
+                        throw err;
+                    }
+                    console.warn(`Lỗi khi gọi OpenRouter model ${model}:`, err.message);
+                    continue;
+                }
+            }
+            throw lastError || new Error("Không thể kết nối tới OpenRouter API.");
 
         } else if (provider === 'openai') {
             log(`🌐 Đang kết nối tới OpenAI (gpt-4o-mini)...`);
