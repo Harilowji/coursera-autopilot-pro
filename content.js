@@ -1016,8 +1016,21 @@ async function applyQuizAnswers(parsedAnswers, questions) {
         answersMap = parsedAnswers;
     }
     let filledCount = 0;
+    const totalQ = questions.length;
+    let curIndex = 0;
 
     for (const q of questions) {
+        curIndex++;
+        const qPercent = Math.min(95, Math.round(50 + (curIndex / totalQ) * 45));
+        safeSendMessage({
+            action: "PROGRESS_UPDATE",
+            percent: qPercent,
+            completed: curIndex,
+            total: totalQ,
+            stage: `${curIndex}/${totalQ} câu`,
+            itemName: `Đang điền câu ${q.displayNumber || curIndex}/${totalQ}...`
+        });
+
         const rawAnswer = getAnswerForQuestion(answersMap, q);
         if (rawAnswer === undefined || rawAnswer === null) {
             console.warn(`[AutopilotPro] Không tìm thấy đáp án cho câu ${q.displayNumber}`);
@@ -1136,7 +1149,7 @@ class SkiperaJS {
         this.isStopped = true;
         this.isRunning = false;
         log("🛑 Đang dừng tiến trình...");
-        safeSendMessage({ action: "FINISHED" });
+        safeSendMessage({ action: "FINISHED", success: false, successMessage: "Tiến trình đã được dừng." });
     }
 
     getHeaders() {
@@ -1216,6 +1229,14 @@ class SkiperaJS {
         try {
             this.isRunning = true;
             this.currentTaskName = this.mode === 'safe' ? "Safe Farm" : "Turbo Skip";
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                percent: 10,
+                completed: 0,
+                total: 0,
+                itemName: "Đang kết nối tải danh sách bài học...",
+                stage: "Khởi động"
+            });
 
             const response = await fetch(BASE_URL + "onDemandCourseMaterials.v2/?" + params.toString(), {
                 headers: this.getHeaders()
@@ -1224,7 +1245,7 @@ class SkiperaJS {
             if (!json.elements || json.elements.length === 0) {
                 log("❌ Không tìm thấy thông tin khóa học.");
                 this.isRunning = false;
-                safeSendMessage({ action: "FINISHED" });
+                safeSendMessage({ action: "FINISHED", success: false });
                 return;
             }
             this.courseId = json.elements[0].id;
@@ -1247,7 +1268,8 @@ class SkiperaJS {
                 percent: initPct,
                 completed: initialDone,
                 total: items.length,
-                itemName: initialDone === items.length ? "Khóa học đã đủ 100%!" : "Khởi động quét bài học..."
+                itemName: initialDone === items.length ? "Khóa học đã đủ 100%!" : "Khởi động quét bài học...",
+                stage: `${initialDone}/${items.length} bài`
             };
             safeSendMessage({
                 action: "PROGRESS_UPDATE",
@@ -1256,9 +1278,17 @@ class SkiperaJS {
 
             if (items.length > 0 && initialDone === items.length) {
                 log("🎉 Toàn bộ bài học trong khóa đều đã hoàn thành trước đó!");
-                await this.getCertificateInfo();
+                safeSendMessage({
+                    action: "PROGRESS_UPDATE",
+                    percent: 100,
+                    completed: items.length,
+                    total: items.length,
+                    itemName: "🎉 Toàn bộ bài học đã hoàn thành 100%!",
+                    stage: "100%"
+                });
+                await this.getCertificateInfo(false);
                 this.isRunning = false;
-                safeSendMessage({ action: "FINISHED" });
+                safeSendMessage({ action: "FINISHED", success: true, successMessage: "Khóa học đã đạt 100% hoàn thành!" });
                 return;
             }
 
@@ -1350,17 +1380,20 @@ class SkiperaJS {
                     percent: finalPct,
                     completed: finalDone,
                     total: items.length,
-                    itemName: finalPct === 100 ? "Hoàn thành 100% khóa học!" : "Tiến trình hoàn tất!"
+                    itemName: finalPct === 100 ? "Hoàn thành 100% khóa học!" : "Tiến trình hoàn tất!",
+                    stage: `${finalPct}%`
                 };
                 safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
                 // Auto check certificate
-                await this.getCertificateInfo();
+                await this.getCertificateInfo(false);
+                safeSendMessage({ action: "FINISHED", success: true, successMessage: "Hoàn tất xử lý bài học trong khóa!" });
+            } else {
+                safeSendMessage({ action: "FINISHED", success: false });
             }
-            safeSendMessage({ action: "FINISHED" });
         } catch (err) {
             this.isRunning = false;
             log(`❌ Lỗi khi quét khóa học: ${err.message}`);
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
         }
     }
 
@@ -1374,7 +1407,7 @@ class SkiperaJS {
         if (!ok) {
             this.isRunning = false;
             log("❌ Không lấy được thông tin tài khoản.");
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
             return;
         }
 
@@ -1388,6 +1421,14 @@ class SkiperaJS {
 
         try {
             log("🔍 Đang phân tích tiến độ thực tế toàn bộ khóa học...");
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                percent: 25,
+                completed: 0,
+                total: 0,
+                itemName: "Đang phân tích tiến độ thực tế...",
+                stage: "Khởi động"
+            });
             const res = await fetch(BASE_URL + "onDemandCourseMaterials.v2/?" + params.toString(), {
                 headers: this.getHeaders()
             });
@@ -1395,7 +1436,7 @@ class SkiperaJS {
             if (!json.elements || json.elements.length === 0) {
                 this.isRunning = false;
                 log("❌ Không tìm thấy thông tin khóa học.");
-                safeSendMessage({ action: "FINISHED" });
+                safeSendMessage({ action: "FINISHED", success: false });
                 return;
             }
             this.courseId = json.elements[0].id;
@@ -1421,7 +1462,7 @@ class SkiperaJS {
             
             if (uncompleted.length === 0) {
                 log(`🎉 KHÓA HỌC ĐÃ HOÀN THÀNH 100%! Bạn đủ điều kiện nhận chứng chỉ.`);
-                await this.getCertificateInfo();
+                await this.getCertificateInfo(false);
             } else {
                 log(`⚠️ CÒN ${uncompleted.length} BÀI CHƯA HOÀN THÀNH:`);
                 uncompleted.slice(0, 10).forEach((u, i) => {
@@ -1436,24 +1477,33 @@ class SkiperaJS {
                 percent: Math.round(pct),
                 completed: completedCount,
                 total: items.length,
-                itemName: uncompleted.length === 0 ? "100% Hoàn tất!" : `Còn ${uncompleted.length} bài chưa xong`
+                itemName: uncompleted.length === 0 ? "100% Hoàn tất!" : `Còn ${uncompleted.length} bài chưa xong`,
+                stage: `${completedCount}/${items.length} bài`
             };
             safeSendMessage({
                 action: "PROGRESS_UPDATE",
                 ...this.lastProgress
             });
             this.isRunning = false;
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: true, successMessage: `Tiến độ hiện tại: ${pct}% (${completedCount}/${items.length} bài)` });
         } catch (e) {
             this.isRunning = false;
             log("❌ Lỗi kiểm tra tiến độ: " + e.message);
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
         }
     }
 
     // --- TRUY XUẤT LINK VERIFY CHỨNG CHỈ CHO FAP ---
-    async getCertificateInfo() {
+    async getCertificateInfo(isStandalone = true) {
         try {
+            if (isStandalone) {
+                safeSendMessage({
+                    action: "PROGRESS_UPDATE",
+                    percent: 30,
+                    itemName: "Đang truy xuất thông tin chứng chỉ...",
+                    stage: "Kết nối"
+                });
+            }
             log("🎓 Đang truy xuất thông tin chứng chỉ & link Verify...");
             const url = `${BASE_URL}openCourseMemberships.v1/${this.userId}~${this.courseId}`;
             const res = await fetch(url, { headers: this.getHeaders() });
@@ -1506,15 +1556,27 @@ class SkiperaJS {
                         studentName: fullName,
                         certCode: certCode
                     });
-                    safeSendMessage({ action: "FINISHED" });
+                    if (isStandalone) {
+                        safeSendMessage({
+                            action: "PROGRESS_UPDATE",
+                            percent: 100,
+                            itemName: "Đã tìm thấy chứng chỉ Coursera!",
+                            stage: "Hoàn tất"
+                        });
+                        safeSendMessage({ action: "FINISHED", success: true, successMessage: "Đã tìm thấy chứng chỉ Coursera!" });
+                    }
                     return;
                 }
             }
             log("ℹ️ Môn học chưa cấp Certificate Code. Hãy chắc chắn bạn đã Passed tất cả Graded Quizzes và Peer Reviews!");
-            safeSendMessage({ action: "FINISHED" });
+            if (isStandalone) {
+                safeSendMessage({ action: "FINISHED", success: false });
+            }
         } catch (e) {
             console.warn("Cert fetch error:", e);
-            safeSendMessage({ action: "FINISHED" });
+            if (isStandalone) {
+                safeSendMessage({ action: "FINISHED", success: false });
+            }
         }
     }
 
@@ -1611,6 +1673,12 @@ class SkiperaJS {
     // --- AUTO DO PEER ASSIGNMENT ---
     async autoDoPeerAssignment() {
         log("📝 Đang bắt đầu tự động nộp bài Peer Assignment...");
+        safeSendMessage({
+            action: "PROGRESS_UPDATE",
+            percent: 25,
+            itemName: "Đang sinh nội dung học thuật cho bài tập...",
+            stage: "Soạn thảo"
+        });
 
         const template = getRandomItem(PEER_SUBMISSION_TEMPLATES);
 
@@ -1640,6 +1708,13 @@ class SkiperaJS {
             await simulateInput(titleInput, template.title);
         }
 
+        safeSendMessage({
+            action: "PROGRESS_UPDATE",
+            percent: 60,
+            itemName: "Đang điền nội dung vào các trường bài làm...",
+            stage: "Điền form"
+        });
+
         const contentInputs = Array.from(document.querySelectorAll('textarea, div[data-slate-editor="true"], div[role="textbox"]'))
             .filter(el => el !== titleInput);
 
@@ -1655,6 +1730,13 @@ class SkiperaJS {
             agreementBox.checked = true;
             agreementBox.dispatchEvent(new Event('change', { bubbles: true }));
         }
+
+        safeSendMessage({
+            action: "PROGRESS_UPDATE",
+            percent: 85,
+            itemName: "Tích cam kết danh dự và chuẩn bị nộp bài...",
+            stage: "Xác nhận"
+        });
 
         await new Promise(r => setTimeout(r, 1000));
 
@@ -1677,15 +1759,28 @@ class SkiperaJS {
                 finalConfirm.click();
             }
             log("🎉 Đã nộp bài Peer Assignment thành công!");
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                percent: 100,
+                itemName: "Nộp bài Peer Assignment thành công!",
+                stage: "Hoàn tất"
+            });
+            safeSendMessage({ action: "FINISHED", success: true, successMessage: "Nộp bài Peer Assignment thành công!" });
         } else {
             log("⚠️ Không tìm thấy nút Submit hoặc nút đang bị khóa.");
+            safeSendMessage({ action: "FINISHED", success: false });
         }
-        safeSendMessage({ action: "FINISHED" });
     }
 
     // --- AUTO GRADE PEER ---
     async autoGradePeer(expectedCount = 3) {
         log(`⭐ Bắt đầu chấm chéo Peer Review (Mục tiêu: ${expectedCount} bài)...`);
+        safeSendMessage({
+            action: "PROGRESS_UPDATE",
+            percent: 15,
+            itemName: `Bắt đầu chấm chéo ${expectedCount} bài...`,
+            stage: "Khởi động"
+        });
         let gradedCount = 0;
 
         const checkRemaining = () => {
@@ -1810,21 +1905,47 @@ class SkiperaJS {
                 if (submitBtn) {
                     submitBtn.click();
                     await new Promise(r => setTimeout(r, 4000));
-                    log(`✔ Đã chấm xong bài ${++gradedCount}/${expectedCount}.`);
+                    gradedCount++;
+                    const peerPct = Math.min(95, Math.round((gradedCount / expectedCount) * 90));
+                    safeSendMessage({
+                        action: "PROGRESS_UPDATE",
+                        percent: peerPct,
+                        itemName: `Đã chấm xong bài ${gradedCount}/${expectedCount}`,
+                        completed: gradedCount,
+                        total: expectedCount,
+                        stage: `${gradedCount}/${expectedCount} bài`
+                    });
+                    log(`✔ Đã chấm xong bài ${gradedCount}/${expectedCount}.`);
                 } else {
                     break;
                 }
             }
         }
 
-        if (gradedCount >= expectedCount) {
+        if (gradedCount >= expectedCount || gradedCount > 0) {
             log(`🎉 Hoàn thành xuất sắc chấm chéo ${gradedCount} bài!`);
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                percent: 100,
+                itemName: `Hoàn tất chấm ${gradedCount} bài peer review!`,
+                completed: gradedCount,
+                total: expectedCount,
+                stage: "Hoàn tất"
+            });
+            safeSendMessage({ action: "FINISHED", success: true, successMessage: `Đã chấm ${gradedCount} bài peer review!` });
+        } else {
+            safeSendMessage({ action: "FINISHED", success: false });
         }
-        safeSendMessage({ action: "FINISHED" });
     }
 
     // --- AUTO DISCUSSION ---
     async autoFillDiscussion() {
+        safeSendMessage({
+            action: "PROGRESS_UPDATE",
+            percent: 30,
+            itemName: "Đang mở form phản hồi thảo luận...",
+            stage: "Mở form"
+        });
         let editor = document.querySelector('div[data-slate-editor="true"]') || document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
         
         if (!editor) {
@@ -1844,8 +1965,16 @@ class SkiperaJS {
 
         if (!editor) {
             log("❌ Không tìm thấy ô nhập phản hồi thảo luận.");
+            safeSendMessage({ action: "FINISHED", success: false });
             return;
         }
+
+        safeSendMessage({
+            action: "PROGRESS_UPDATE",
+            percent: 70,
+            itemName: "Đang viết bình luận học thuật...",
+            stage: "Viết bài"
+        });
 
         editor.focus();
         const textToFill = getRandomItem(DISCUSSION_TEMPLATES);
@@ -1881,10 +2010,17 @@ class SkiperaJS {
         if (postBtn) {
             postBtn.click();
             log("💬 Đã gửi bài thảo luận thành công!");
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                percent: 100,
+                itemName: "Đã gửi phản hồi thảo luận thành công!",
+                stage: "Hoàn tất"
+            });
+            safeSendMessage({ action: "FINISHED", success: true, successMessage: "Đã gửi bài thảo luận thành công!" });
         } else {
             log("⚠️ Không tìm thấy nút Post/Reply.");
+            safeSendMessage({ action: "FINISHED", success: false });
         }
-        safeSendMessage({ action: "FINISHED" });
     }
 
     // --- CALL AI API WITH MODEL FALLBACK CHAINS ---
@@ -2154,7 +2290,7 @@ class SkiperaJS {
             this.isRunning = false;
             log("❌ Không tìm thấy câu hỏi trắc nghiệm nào trên trang hiện tại!");
             log("👉 Hãy chắc chắn bạn đang ở trang bài thi hoặc bài thực hành (Quiz / Practice Attempt)!");
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
             return;
         }
 
@@ -2163,6 +2299,7 @@ class SkiperaJS {
             percent: 35,
             completed: 2,
             total: 4,
+            stage: `${questions.length} câu`,
             itemName: `Gửi ${questions.length} câu lên ${provider.toUpperCase()}...`
         };
         safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
@@ -2179,6 +2316,7 @@ class SkiperaJS {
                 percent: 75,
                 completed: 3,
                 total: 4,
+                stage: "Điền đáp án",
                 itemName: "Đang điền đáp án vào bài thi..."
             };
             safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
@@ -2193,13 +2331,18 @@ class SkiperaJS {
             }
             this.lastProgress = {
                 percent: 100,
-                completed: 4,
-                total: 4,
+                completed: questions.length,
+                total: questions.length,
+                stage: "Hoàn tất",
                 itemName: `Hoàn tất giải ${questions.length} câu hỏi!`
             };
             safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
             this.isRunning = false;
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({
+                action: "FINISHED",
+                success: true,
+                successMessage: `Hoàn tất giải ${questions.length} câu hỏi!`
+            });
 
         } catch (e) {
             this.isRunning = false;
@@ -2216,12 +2359,22 @@ class SkiperaJS {
                 log("2️⃣ Dùng chế độ Không Cần Key (Zero-Key): Sang thẻ 'Không cần Key', bấm '1. Copy đề thi' ➔ Dán vào ChatGPT / Gemini Web ➔ Copy JSON dán vào ô ➔ Bấm 'Áp dụng'.");
                 log("3️⃣ Dùng tài khoản Google khác để tạo thêm 1 API Key mới tại: https://aistudio.google.com/app/apikey");
             }
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
         }
     }
 
     // --- ZERO-KEY MODE: COPY PROMPT ---
     async copyQuizPrompt() {
+        this.isRunning = true;
+        this.currentTaskName = "Zero-Key (Copy đề)";
+        this.lastProgress = {
+            percent: 25,
+            completed: 1,
+            total: 3,
+            stage: "Quét đề",
+            itemName: "Đang quét câu hỏi đề thi / bài thực hành..."
+        };
+        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
         log("📋 Đang cào toàn bộ câu hỏi đề thi / bài thực hành...");
         
         // Step 1: Initial polling for React SPA component rendering (up to 3s)
@@ -2237,6 +2390,14 @@ class SkiperaJS {
             const startBtn = findCourseraStartButton();
             if (startBtn) {
                 log("ℹ️ Phát hiện nút vào thi / thực hành. Đang tự động mở bài...");
+                this.lastProgress = {
+                    percent: 45,
+                    completed: 1,
+                    total: 3,
+                    stage: "Mở bài",
+                    itemName: "Đang tự động mở bài thi / bài tập..."
+                };
+                safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
                 startBtn.click();
                 for (let attempt = 0; attempt < 10; attempt++) {
                     await new Promise(r => setTimeout(r, 500));
@@ -2247,10 +2408,20 @@ class SkiperaJS {
         }
 
         if (questions.length === 0) {
+            this.isRunning = false;
             log("❌ Không tìm thấy câu hỏi nào! Hãy đảm bảo bạn đang ở trang bài thi hoặc bài thực hành (Quiz / Practice Attempt).");
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
             return { success: false, error: "no_questions" };
         }
+
+        this.lastProgress = {
+            percent: 75,
+            completed: 2,
+            total: 3,
+            stage: `${questions.length} câu`,
+            itemName: `Đã tìm thấy ${questions.length} câu. Đang bóc tách đề & code...`
+        };
+        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
 
         const prompt = generateQuizPrompt(questions);
         const copied = await copyTextToClipboard(prompt);
@@ -2261,27 +2432,79 @@ class SkiperaJS {
         } else {
             log(`📋 Đã tạo xong đề thi (${questions.length} câu). Đang truyền sang Popup để lưu clipboard...`);
         }
-        safeSendMessage({ action: "FINISHED" });
+
+        this.lastProgress = {
+            percent: 100,
+            completed: questions.length,
+            total: questions.length,
+            stage: "Hoàn tất",
+            itemName: `Đã copy xong đề thi (${questions.length} câu)!`
+        };
+        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+
+        this.isRunning = false;
+        safeSendMessage({
+            action: "FINISHED",
+            success: true,
+            successMessage: `Đã copy đề thi (${questions.length} câu) vào Clipboard!`
+        });
         return { success: true, count: questions.length, prompt: prompt, copied: copied };
     }
 
     // --- ZERO-KEY MODE: APPLY JSON ANSWERS ---
     async applyAnswersFromJson(jsonString) {
+        this.isRunning = true;
+        this.currentTaskName = "Zero-Key (Điền đáp án)";
+        this.lastProgress = {
+            percent: 20,
+            completed: 1,
+            total: 3,
+            stage: "Đọc JSON",
+            itemName: "Đang phân tích cấu trúc JSON từ AI..."
+        };
+        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+
         try {
             const parsed = extractJsonFromText(jsonString);
             if (!parsed) {
+                this.isRunning = false;
                 log("❌ Chuỗi JSON không hợp lệ! Hãy chắc chắn bạn đã copy đúng định dạng từ AI.");
-                safeSendMessage({ action: "FINISHED" });
+                safeSendMessage({ action: "FINISHED", success: false });
                 return;
             }
+
+            this.lastProgress = {
+                percent: 45,
+                completed: 2,
+                total: 3,
+                stage: "Quét form",
+                itemName: "Đang khớp câu hỏi & tích chọn các phương án..."
+            };
+            safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
 
             const questions = extractQuizQuestions();
             const count = await applyQuizAnswers(parsed, questions);
             log(`🎉 Đã điền thành công ${count} đáp án từ kết quả JSON của bạn!`);
-            safeSendMessage({ action: "FINISHED" });
+
+            this.lastProgress = {
+                percent: 100,
+                completed: count,
+                total: questions.length || count,
+                stage: "Hoàn tất",
+                itemName: `Đã điền thành công ${count} đáp án!`
+            };
+            safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+
+            this.isRunning = false;
+            safeSendMessage({
+                action: "FINISHED",
+                success: true,
+                successMessage: `Đã tự động điền ${count} đáp án vào bài thi!`
+            });
         } catch (e) {
+            this.isRunning = false;
             log(`❌ Lỗi áp dụng JSON: ${e.message}`);
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
         }
     }
 }
@@ -2304,7 +2527,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!slug) {
             log("❌ Không nhận diện được slug khóa học. Hãy mở trang chủ khóa học (/home/welcome hoặc /home/week/1)!");
             sendResponse({ status: "error" });
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
             return true;
         }
         activeSkipper = new SkiperaJS(request.mode || 'safe');
@@ -2313,10 +2536,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 activeSkipper.getCourse(slug);
             } else {
                 log("❌ Không lấy được User ID. Hãy chắc chắn bạn đã đăng nhập Coursera!");
-                safeSendMessage({ action: "FINISHED" });
+                safeSendMessage({ action: "FINISHED", success: false });
             }
         }).catch(() => {
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
         });
         sendResponse({ status: "started" });
     } else if (request.action === "AUDIT_COURSE") {
@@ -2324,7 +2547,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!slug) {
             log("❌ Không nhận diện được slug khóa học. Hãy mở trang chủ khóa học!");
             sendResponse({ status: "error" });
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
             return true;
         }
         activeSkipper = new SkiperaJS();
@@ -2335,7 +2558,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!slug) {
             log("❌ Hãy mở trang khóa học trên Coursera!");
             sendResponse({ status: "error" });
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
             return true;
         }
         activeSkipper = new SkiperaJS();
@@ -2350,13 +2573,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     activeSkipper.courseId = json.elements[0].id;
                     await activeSkipper.getCertificateInfo();
                 } else {
-                    safeSendMessage({ action: "FINISHED" });
+                    safeSendMessage({ action: "FINISHED", success: false });
                 }
             } else {
-                safeSendMessage({ action: "FINISHED" });
+                safeSendMessage({ action: "FINISHED", success: false });
             }
         }).catch(() => {
-            safeSendMessage({ action: "FINISHED" });
+            safeSendMessage({ action: "FINISHED", success: false });
         });
         sendResponse({ status: "getting_cert" });
     } else if (request.action === "GET_STATUS") {

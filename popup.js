@@ -206,54 +206,157 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // --- Logging & Status ---
-    function setRunningState(isRunning, customStatus = "") {
+    let hideMonitorTimeout = null;
+
+    function setRunningState(isRunning, customStatus = "", isSuccess = false) {
         if (startBtn) startBtn.disabled = isRunning;
         if (stopBtn) stopBtn.disabled = !isRunning;
         if (globalStopBtn) globalStopBtn.disabled = !isRunning;
 
+        if (hideMonitorTimeout) {
+            clearTimeout(hideMonitorTimeout);
+            hideMonitorTimeout = null;
+        }
+
+        const liveDot = document.getElementById('globalLiveDot');
+
         if (isRunning) {
-            if (globalMonitorCard) globalMonitorCard.style.display = 'block';
+            if (globalMonitorCard) {
+                globalMonitorCard.style.display = 'block';
+                globalMonitorCard.style.opacity = '1';
+                globalMonitorCard.style.transform = 'translateY(0)';
+            }
             if (activeTaskName) activeTaskName.textContent = customStatus || "Đang xử lý...";
             if (statusDot) statusDot.className = "status-dot running";
             if (statusText) statusText.textContent = customStatus || "Đang chạy";
-            if (progressFill) progressFill.classList.add('running');
-            if (globalProgressFill) globalProgressFill.classList.add('running');
+            if (progressFill) {
+                progressFill.classList.add('running');
+                progressFill.classList.remove('success');
+            }
+            if (globalProgressFill) {
+                globalProgressFill.classList.add('running');
+                globalProgressFill.classList.remove('success');
+            }
+            if (liveDot) liveDot.className = "live-pulse-dot";
+
+            // Immediate active progress feedback (start at 15% shimmer instead of dead 0%)
+            updateProgressUI({
+                percent: 15,
+                itemName: customStatus ? `Bắt đầu ${customStatus}...` : "Đang khởi tạo...",
+                stage: "Khởi động"
+            });
         } else {
-            if (statusDot) statusDot.className = "status-dot";
-            if (statusText) statusText.textContent = "Sẵn sàng";
-            if (progressFill) progressFill.classList.remove('running');
-            if (globalProgressFill) globalProgressFill.classList.remove('running');
-            setTimeout(() => {
-                const stillRunning = statusDot && statusDot.classList.contains('running');
-                if (!stillRunning && globalMonitorCard) {
-                    globalMonitorCard.style.display = 'none';
+            if (isSuccess) {
+                updateProgressUI({
+                    percent: 100,
+                    itemName: "✅ Hoàn tất thành công!",
+                    stage: "100%"
+                });
+                if (statusDot) statusDot.className = "status-dot success";
+                if (statusText) statusText.textContent = customStatus || "Hoàn tất";
+                if (progressFill) {
+                    progressFill.classList.remove('running');
+                    progressFill.classList.add('success');
+                    progressFill.style.width = '100%';
                 }
-            }, 4500);
+                if (globalProgressFill) {
+                    globalProgressFill.classList.remove('running');
+                    globalProgressFill.classList.add('success');
+                    globalProgressFill.style.width = '100%';
+                }
+                if (liveDot) liveDot.className = "live-pulse-dot success";
+                if (globalProgressPercent) {
+                    globalProgressPercent.textContent = "100%";
+                    globalProgressPercent.style.color = "var(--success, #10b981)";
+                }
+
+                // Hold 100% completed state for 3.2s so user clearly sees the 100% achievement
+                hideMonitorTimeout = setTimeout(() => {
+                    const stillRunning = statusDot && statusDot.classList.contains('running');
+                    if (!stillRunning && globalMonitorCard) {
+                        globalMonitorCard.style.opacity = '0';
+                        setTimeout(() => {
+                            globalMonitorCard.style.display = 'none';
+                            globalMonitorCard.style.opacity = '1';
+                            if (globalProgressFill) globalProgressFill.classList.remove('success');
+                            if (statusDot) statusDot.className = "status-dot";
+                            if (statusText) statusText.textContent = "Sẵn sàng";
+                            if (globalProgressPercent) globalProgressPercent.style.color = "";
+                        }, 400);
+                    }
+                }, 3200);
+            } else {
+                if (statusDot) statusDot.className = "status-dot";
+                if (statusText) statusText.textContent = customStatus || "Sẵn sàng";
+                if (progressFill) progressFill.classList.remove('running');
+                if (globalProgressFill) globalProgressFill.classList.remove('running');
+
+                hideMonitorTimeout = setTimeout(() => {
+                    const stillRunning = statusDot && statusDot.classList.contains('running');
+                    if (!stillRunning && globalMonitorCard) {
+                        globalMonitorCard.style.opacity = '0';
+                        setTimeout(() => {
+                            globalMonitorCard.style.display = 'none';
+                            globalMonitorCard.style.opacity = '1';
+                        }, 400);
+                    }
+                }, 2000);
+            }
         }
     }
 
     function updateProgressUI(data) {
-        const pct = data.percent !== undefined ? data.percent : 0;
+        const pct = Math.max(0, Math.min(100, data.percent !== undefined ? Math.round(data.percent) : 0));
         const comp = data.completed !== undefined ? data.completed : 0;
         const tot = data.total !== undefined ? data.total : 0;
         const name = data.itemName || "";
+        const stage = data.stage || "";
 
         if (progressContainer) progressContainer.style.display = 'block';
         if (progressPercent) progressPercent.textContent = `${pct}%`;
         if (progressFill) progressFill.style.width = `${pct}%`;
-        if (progressLabel && tot > 0) {
-            progressLabel.textContent = `Tiến độ: ${comp}/${tot} bài (${pct}%)`;
+        if (progressLabel) {
+            if (tot > 0) progressLabel.textContent = `Tiến độ: ${comp}/${tot} bài (${pct}%)`;
+            else if (stage) progressLabel.textContent = `Tiến độ: ${stage} (${pct}%)`;
+            else progressLabel.textContent = `Tiến độ: ${pct}%`;
         }
 
-        if (globalMonitorCard) globalMonitorCard.style.display = 'block';
-        if (globalProgressPercent) globalProgressPercent.textContent = `${pct}%`;
-        if (globalProgressFill) globalProgressFill.style.width = `${pct}%`;
+        if (globalMonitorCard) {
+            globalMonitorCard.style.display = 'block';
+            globalMonitorCard.style.opacity = '1';
+        }
+        if (globalProgressPercent) {
+            globalProgressPercent.textContent = `${pct}%`;
+            if (pct === 100) globalProgressPercent.style.color = 'var(--success, #10b981)';
+            else globalProgressPercent.style.color = '';
+        }
+        if (globalProgressFill) {
+            globalProgressFill.style.width = `${pct}%`;
+            if (pct === 100) {
+                globalProgressFill.classList.add('success');
+                globalProgressFill.classList.remove('running');
+            } else {
+                globalProgressFill.classList.remove('success');
+            }
+        }
         if (globalItemName && name) {
             globalItemName.textContent = name;
             globalItemName.title = name;
         }
-        if (globalItemCount && tot > 0) {
-            globalItemCount.textContent = `${comp}/${tot} bài`;
+        if (globalItemCount) {
+            if (tot > 0) {
+                globalItemCount.textContent = `${comp}/${tot} bài`;
+                globalItemCount.style.display = 'inline';
+            } else if (stage) {
+                globalItemCount.textContent = stage;
+                globalItemCount.style.display = 'inline';
+            } else if (pct === 100) {
+                globalItemCount.textContent = "Hoàn tất";
+                globalItemCount.style.display = 'inline';
+            } else {
+                globalItemCount.textContent = "Đang chạy";
+                globalItemCount.style.display = 'inline';
+            }
         }
         if (statusText && name) {
             statusText.textContent = name.length > 20 ? name.substring(0, 18) + "..." : name;
@@ -525,20 +628,24 @@ document.addEventListener('DOMContentLoaded', function () {
                         copyQuizBtn.textContent = `✅ Đã copy ${response.count} câu!`;
                         log(`✅ ĐÃ COPY ĐỀ THI (${response.count} câu) VÀO CLIPBOARD!`);
                         log("👉 Hãy mở ChatGPT / Gemini Web, nhấn Ctrl+V để dán và lấy kết quả JSON.");
+                        setRunningState(false, "Hoàn tất", true);
                     } else {
                         copyQuizBtn.textContent = "⚠️ Lỗi Clipboard";
                         log("⚠️ Không thể tự động ghi vào clipboard. Hãy kiểm tra quyền trình duyệt.");
+                        setRunningState(false, "Lỗi Clipboard", false);
                     }
                     setTimeout(() => {
                         copyQuizBtn.textContent = originalText;
                     }, 4000);
                 } else if (response && response.error === "no_questions") {
+                    setRunningState(false, "Không có câu hỏi", false);
                     copyQuizBtn.textContent = "❌ Không thấy câu hỏi";
                     log("❌ Không tìm thấy câu hỏi nào! Hãy chắc chắn bạn đang ở trang bài thi hoặc bài thực hành (Quiz / Practice / Lab).");
                     setTimeout(() => {
                         copyQuizBtn.textContent = originalText;
                     }, 4000);
                 } else {
+                    setRunningState(false, "Lỗi", false);
                     copyQuizBtn.textContent = originalText;
                 }
             });
@@ -563,7 +670,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "APPLY_QUIZ_ANSWERS", jsonAnswers: rawJson }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang bài thi rồi thử lại.");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 }
             });
         });
@@ -588,8 +695,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (request.action === "LOG") {
             log(request.message);
         } else if (request.action === "FINISHED") {
-            setRunningState(false);
-            log("🏁 Tiến trình hoàn tất!");
+            const isSuccess = (request.success !== false) && (request.isSuccess !== false);
+            setRunningState(false, isSuccess ? "Hoàn tất" : "Đã dừng", isSuccess);
+            log(request.successMessage ? `🏁 ${request.successMessage}` : (isSuccess ? "🏁 Tiến trình hoàn tất!" : "⏹ Tiến trình đã dừng."));
         } else if (request.action === "PROGRESS_UPDATE") {
             updateProgressUI(request);
         } else if (request.action === "CERT_FOUND") {

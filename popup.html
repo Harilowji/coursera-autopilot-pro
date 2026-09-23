@@ -215,6 +215,12 @@
       animation: pulse 1.5s infinite;
     }
 
+    .status-dot.success {
+      background: #10b981;
+      box-shadow: 0 0 7px #10b981;
+      animation: none;
+    }
+
     @keyframes pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.5; transform: scale(1.2); }
@@ -368,7 +374,7 @@
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3), 0 0 12px var(--accent-glow, transparent);
       padding: 9px 11px;
       margin-bottom: 10px;
-      transition: all 0.25s ease;
+      transition: opacity 0.35s ease, transform 0.35s ease;
     }
 
     .live-pulse-dot {
@@ -379,6 +385,12 @@
       box-shadow: 0 0 7px var(--warning);
       animation: pulse 1.4s infinite;
       display: inline-block;
+    }
+
+    .live-pulse-dot.success {
+      background: #10b981;
+      box-shadow: 0 0 7px #10b981;
+      animation: none;
     }
 
     .progress-bar-track {
@@ -395,9 +407,14 @@
       height: 100%;
       background: var(--accent-gradient, var(--accent));
       border-radius: 999px;
-      transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: width 0.4s cubic-bezier(0.25, 1, 0.5, 1);
       position: relative;
       box-shadow: 0 0 8px var(--accent-glow, transparent);
+    }
+
+    .progress-bar-fill.success {
+      background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%) !important;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.45) !important;
     }
 
     .progress-bar-fill.running::after {
@@ -578,7 +595,7 @@
   <div id="globalMonitorCard" class="monitor-card" style="display: none;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
       <div style="display: flex; align-items: center; gap: 6px;">
-        <span class="live-pulse-dot"></span>
+        <span class="live-pulse-dot" id="globalLiveDot"></span>
         <span id="activeTaskName" style="font-weight: 700; font-size: 11.5px; color: var(--text);">Đang xử lý</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
