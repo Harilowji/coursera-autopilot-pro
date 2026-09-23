@@ -98,17 +98,174 @@ async function copyTextToClipboard(text) {
     }
 }
 
-// JSON extraction helper
+// ============================================================
+// ADVANCED COURSERA CML TO MARKDOWN FORMATTER
+// Preserves code blocks, exact indentation, math equations, and diagram image URLs
+// ============================================================
+function formatCourseraNodeToMarkdown(containerEl) {
+    if (!containerEl) return "";
+    
+    // Deep clone so we do not mutate the live Coursera quiz DOM
+    const clone = containerEl.cloneNode(true);
+
+    // 1. Remove unwanted noisy UI elements
+    const junkSelectors = [
+        'input[type="radio"]', 'input[type="checkbox"]',
+        'span.rc-FormPart__points', 'span[class*="points"]',
+        'span[class*="Points"]', 'button', 'svg', '.screenreader-only', 'span.sr-only'
+    ];
+    junkSelectors.forEach(sel => {
+        clone.querySelectorAll(sel).forEach(el => el.remove());
+    });
+
+    // 2. Format MathJax & KaTeX formulas (extract exact LaTeX annotation)
+    clone.querySelectorAll('.cml-math, .katex, .MathJax, math').forEach(mathEl => {
+        const texAnnotation = mathEl.querySelector('annotation[encoding="application/x-tex"]') ||
+                              mathEl.querySelector('annotation');
+        let tex = texAnnotation ? texAnnotation.textContent.trim() : "";
+        if (!tex && mathEl.getAttribute('aria-label')) {
+            tex = mathEl.getAttribute('aria-label');
+        }
+        if (tex) {
+            const span = document.createElement('span');
+            span.textContent = ` $${tex}$ `;
+            mathEl.replaceWith(span);
+        }
+    });
+
+    // 3. Format Code Blocks (<pre>, .cml-code, Prism / Highlight code)
+    clone.querySelectorAll('pre, .cml-code, div[class*="code-block"], div[class*="CodeBlock"]').forEach(preEl => {
+        const codeText = preEl.textContent.replace(/\r\n/g, '\n');
+        
+        // Detect programming language
+        let lang = "";
+        const classNames = (preEl.className || "") + " " + (preEl.querySelector('code')?.className || "");
+        const langMatch = classNames.match(/(?:language-|lang-)([a-zA-Z0-9_\+#]+)/i);
+        if (langMatch) {
+            lang = langMatch[1].toLowerCase();
+        } else {
+            if (codeText.includes('def ') || codeText.includes('import ') || codeText.includes('print(') || codeText.includes('elif ')) {
+                lang = "python";
+            } else if (codeText.includes('#include <') || codeText.includes('int main(') || codeText.includes('printf(')) {
+                lang = "c";
+            } else if (codeText.includes('SELECT ') || codeText.includes('FROM ') || codeText.includes('WHERE ')) {
+                lang = "sql";
+            } else if (codeText.includes('public class ') || codeText.includes('System.out.println')) {
+                lang = "java";
+            } else if (codeText.includes('function ') || codeText.includes('const ') || codeText.includes('console.log')) {
+                lang = "javascript";
+            }
+        }
+
+        const div = document.createElement('div');
+        div.textContent = `\n\`\`\`${lang}\n${codeText.trimEnd()}\n\`\`\`\n`;
+        preEl.replaceWith(div);
+    });
+
+    // 4. Format Inline Code (<code>, <kbd>, <tt>)
+    clone.querySelectorAll('code, kbd, tt').forEach(codeEl => {
+        const text = codeEl.textContent.trim();
+        if (text) {
+            const span = document.createElement('span');
+            span.textContent = ` \`${text}\` `;
+            codeEl.replaceWith(span);
+        }
+    });
+
+    // 5. Format Images / Diagrams
+    clone.querySelectorAll('img').forEach(imgEl => {
+        const src = imgEl.getAttribute('src') || '';
+        const alt = imgEl.getAttribute('alt') || imgEl.getAttribute('title') || 'Diagram / Image';
+        if (src) {
+            const div = document.createElement('div');
+            div.textContent = `\n[📸 SƠ ĐỒ / HÌNH ẢNH: "${alt}" - URL: ${src}]\n`;
+            imgEl.replaceWith(div);
+        }
+    });
+
+    // 6. Format Tables to Markdown Tables
+    clone.querySelectorAll('table').forEach(tableEl => {
+        const rows = Array.from(tableEl.querySelectorAll('tr'));
+        if (rows.length === 0) return;
+        
+        let mdTable = "\n";
+        rows.forEach((row, rIdx) => {
+            const cells = Array.from(row.querySelectorAll('th, td')).map(c => c.textContent.trim().replace(/\|/g, '\\|'));
+            if (cells.length > 0) {
+                mdTable += `| ${cells.join(' | ')} |\n`;
+                if (rIdx === 0) {
+                    mdTable += `| ${cells.map(() => '---').join(' | ')} |\n`;
+                }
+            }
+        });
+        mdTable += "\n";
+        const div = document.createElement('div');
+        div.textContent = mdTable;
+        tableEl.replaceWith(div);
+    });
+
+    // 7. Format Line breaks, Lists, and Paragraphs
+    clone.querySelectorAll('br').forEach(br => br.replaceWith(document.createTextNode('\n')));
+    clone.querySelectorAll('li').forEach(li => li.prepend(document.createTextNode('\n- ')));
+    clone.querySelectorAll('p, div.cml-paragraph').forEach(p => {
+        p.prepend(document.createTextNode('\n\n'));
+        p.append(document.createTextNode('\n\n'));
+    });
+
+    // 8. Normalize whitespace while preserving code blocks
+    let result = clone.textContent || clone.innerText || "";
+    result = result.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    return result;
+}
+
+// Bulletproof JSON extraction helper (handles markdown fences, comments, trailing commas, smart quotes)
 function extractJsonFromText(rawText) {
-    if (!rawText) return null;
-    let clean = rawText.trim();
-    clean = clean.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
-    const firstBrace = clean.indexOf('{');
-    const lastBrace = clean.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        clean = clean.substring(firstBrace, lastBrace + 1);
+    if (!rawText || typeof rawText !== 'string') return null;
+    let text = rawText.trim();
+
+    // 1. Try to extract content inside markdown code blocks (```json ... ``` or ``` ... ```)
+    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (codeBlockMatch && codeBlockMatch[1]) {
+        text = codeBlockMatch[1].trim();
     }
-    return JSON.parse(clean);
+
+    // 2. Identify outermost JSON bounds (either object { ... } or array [ ... ])
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    const firstBracket = text.indexOf('[');
+    const lastBracket = text.lastIndexOf(']');
+
+    let jsonCandidate = text;
+    if (firstBrace !== -1 && lastBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+        jsonCandidate = text.substring(firstBrace, lastBrace + 1);
+    } else if (firstBracket !== -1 && lastBracket !== -1) {
+        jsonCandidate = text.substring(firstBracket, lastBracket + 1);
+    }
+
+    // 3. Clean common AI artifacts:
+    // Remove single-line comments // ...
+    jsonCandidate = jsonCandidate.replace(/\/\/.*$/gm, '');
+    // Remove multi-line comments /* ... */
+    jsonCandidate = jsonCandidate.replace(/\/\*[\s\S]*?\*\//g, '');
+    // Remove trailing commas before } or ]
+    jsonCandidate = jsonCandidate.replace(/,\s*([\}\]])/g, '$1');
+
+    // 4. Try parsing standard JSON
+    try {
+        return JSON.parse(jsonCandidate);
+    } catch (e1) {
+        // Fallback: try parsing with loose sanitization (smart quotes, etc.)
+        try {
+            const sanitized = jsonCandidate
+                .replace(/[\u201C\u201D]/g, '"') // smart double quotes
+                .replace(/[\u2018\u2019]/g, "'") // smart single quotes
+                .replace(/,\s*([\}\]])/g, '$1');
+            return JSON.parse(sanitized);
+        } catch (e2) {
+            console.warn("[AutopilotPro] Could not parse JSON:", e2, jsonCandidate);
+            return null;
+        }
+    }
 }
 
 // ============================================================
@@ -168,11 +325,11 @@ function extractQuizQuestions() {
             let qText = "";
             if (container) {
                 const textEl = container.querySelector('.rc-CML, [data-testid="cml-viewer"], legend, .rc-FormPart__question-text, .rc-QuestionText, h3, h4');
-                if (textEl) qText = textEl.innerText.trim();
+                if (textEl) qText = formatCourseraNodeToMarkdown(textEl);
                 else {
                     const ancestor = container.parentElement;
                     const ancestorTextEl = ancestor ? ancestor.querySelector('.rc-CML, legend, h3, h4, [data-testid*="question"]') : null;
-                    if (ancestorTextEl) qText = ancestorTextEl.innerText.trim();
+                    if (ancestorTextEl) qText = formatCourseraNodeToMarkdown(ancestorTextEl);
                 }
             }
             if (!qText) qText = `Câu hỏi ${qIdx + 1}`;
@@ -189,8 +346,10 @@ function extractQuizQuestions() {
                 inputs.forEach((inp, oIndex) => {
                     const parentLabel = inp.closest('label');
                     const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || parentLabel || inp.parentElement;
-                    let optText = parentLabel ? (parentLabel.innerText || "") : (parentOpt ? parentOpt.innerText : (inp.value || `Lựa chọn ${oIndex + 1}`));
-                    optText = optText.replace(/^[a-zA-Z0-9][\.\)\-]\s*/, '').trim();
+                    const optContentEl = (parentOpt || parentLabel)?.querySelector?.('.rc-Option__text, [data-testid="cml-viewer"], .cml-viewer, .rc-FormPartsQuestion__option-text') || parentOpt || parentLabel;
+                    let optText = formatCourseraNodeToMarkdown(optContentEl);
+                    if (!optText) optText = inp.value || `Lựa chọn ${oIndex + 1}`;
+                    optText = optText.replace(/^(?:[a-zA-Z][\.\)\:]|\d+[\)\:]|\d+\.)\s+/i, '').trim();
                     options.push({
                         index: oIndex,
                         text: optText || `Lựa chọn ${oIndex + 1}`,
@@ -260,19 +419,18 @@ function extractQuizQuestions() {
 
         for (const sel of contentSelectors) {
             const el = qEl.querySelector(sel);
-            if (el && el.innerText.trim().length > 5) {
-                qText = el.innerText.trim();
+            if (el && (el.innerText || el.textContent || "").trim().length > 5) {
+                qText = formatCourseraNodeToMarkdown(el);
                 break;
             }
         }
 
         if (!qText) {
-            let rawText = qEl.innerText || "";
-            rawText = rawText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '');
-            rawText = rawText.replace(/\d+(?:\.\d+)?\s*points?/gi, '');
-            rawText = rawText.replace(/\d+\s*điểm/gi, '');
-            rawText = rawText.replace(/^Question\s*\d+[\s\.\:]*/i, '');
-            qText = rawText.split('\n').filter(line => line.trim().length > 0)[0] || `Câu hỏi ${qIndex + 1}`;
+            qText = formatCourseraNodeToMarkdown(qEl);
+            qText = qText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '');
+            qText = qText.replace(/\d+(?:\.\d+)?\s*points?/gi, '');
+            qText = qText.replace(/\d+\s*điểm/gi, '');
+            qText = qText.replace(/^Question\s*\d+[\s\.\:]*/i, '');
         }
 
         qText = qText.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
@@ -296,8 +454,10 @@ function extractQuizQuestions() {
             inputElements.forEach((inp, oIndex) => {
                 const parentLabel = inp.closest('label');
                 const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || parentLabel || inp.parentElement;
-                let optText = parentLabel ? (parentLabel.innerText || "") : (parentOpt ? parentOpt.innerText : (inp.value || `Lựa chọn ${oIndex + 1}`));
-                optText = optText.replace(/^[a-zA-Z0-9][\.\)\-]\s*/, '').trim();
+                const optContentEl = (parentOpt || parentLabel)?.querySelector?.('.rc-Option__text, [data-testid="cml-viewer"], .cml-viewer, .rc-FormPartsQuestion__option-text') || parentOpt || parentLabel;
+                let optText = formatCourseraNodeToMarkdown(optContentEl);
+                if (!optText) optText = inp.value || `Lựa chọn ${oIndex + 1}`;
+                optText = optText.replace(/^(?:[a-zA-Z][\.\)\:]|\d+[\)\:]|\d+\.)\s+/i, '').trim();
                 options.push({
                     index: oIndex,
                     text: optText || `Lựa chọn ${oIndex + 1}`,
@@ -323,18 +483,20 @@ function extractQuizQuestions() {
 
 function generateQuizPrompt(questions) {
     let prompt = "You are an expert academic assistant solving a Coursera quiz with 100% accuracy.\n";
-    prompt += "Analyze each question and its choices carefully. Return ONLY a single, valid JSON object in this exact format:\n";
+    prompt += "Analyze each question, code snippet, math formula, and choices carefully.\n";
+    prompt += "Return ONLY a single, valid JSON object in this exact format (no markdown fences, no extra commentary):\n";
     prompt += "{\n  \"answers\": {\n";
     prompt += "    \"1\": [0],\n";
     prompt += "    \"2\": [1, 2],\n";
     prompt += "    \"3\": \"my text answer\"\n";
     prompt += "  }\n}\n\n";
     prompt += "RULES FOR QUIZ SOLVING:\n";
-    prompt += "1. Keys MUST be question numbers (\"1\", \"2\", \"3\", ...).\n";
+    prompt += "1. Keys in \"answers\" MUST be question numbers as strings (\"1\", \"2\", \"3\", ...).\n";
     prompt += "2. For 'Single Choice' or 'Dropdown': return an array with exactly one 0-based option index, e.g. [0] or [2].\n";
     prompt += "3. For 'Multiple Choice' (Select all that apply): return an array of all correct 0-based option indices, e.g. [0, 2].\n";
     prompt += "4. For 'Fill in the blank' / 'Text' / 'Numeric': return the exact string or number answer (e.g. \"42\" or \"supervised learning\").\n";
-    prompt += "5. Return ONLY raw JSON without markdown fences, explanation, or notes.\n\n";
+    prompt += "5. Pay close attention to Python indentation, syntax, and LaTeX math formulas ($...$) embedded in the questions.\n";
+    prompt += "6. Output ONLY the raw JSON object. Do NOT include markdown code blocks (```json) or conversational text.\n\n";
     prompt += "=== EXAM QUESTIONS ===\n\n";
 
     questions.forEach(q => {
@@ -343,16 +505,16 @@ function generateQuizPrompt(questions) {
         else if (q.type === 'text') typeDesc = "Fill in the blank / Direct Answer";
         else if (q.type === 'dropdown') typeDesc = "Dropdown Selection";
 
-        prompt += `--- Question ${q.displayNumber} (${typeDesc}) ---\n`;
-        prompt += `${q.text}\n`;
-        if (q.options.length > 0) {
-            prompt += "Options:\n";
+        prompt += `### Question ${q.displayNumber} [Type: ${typeDesc}]\n`;
+        prompt += `${q.text}\n\n`;
+        if (q.options && q.options.length > 0) {
+            prompt += "Choices:\n";
             q.options.forEach(opt => {
                 const letter = String.fromCharCode(65 + opt.index);
                 prompt += `  [${opt.index}] (${letter}): ${opt.text}\n`;
             });
         }
-        prompt += "\n";
+        prompt += "\n----------------------------------------\n\n";
     });
 
     return prompt;
