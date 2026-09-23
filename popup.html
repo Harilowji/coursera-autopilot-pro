@@ -712,12 +712,15 @@
 
       <!-- Mode 2: Copy Thủ Công (Zero-Key) -->
       <div id="quizManualSection" style="display: none;">
+        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4;">
+          🛡️ <b>Mã hóa chuẩn xác</b>: Giữ nguyên thụt lề Code (Indentation), công thức Toán LaTeX ($...$) & link ảnh sơ đồ để ChatGPT/Gemini hiểu đề thi 100%.
+        </div>
         <button id="copyQuizBtn" class="btn btn-secondary" style="margin-bottom: 8px;">
-          1. Copy đề thi (Kèm Prompt)
+          1. Copy đề thi (Kèm Prompt chuẩn)
         </button>
 
         <div class="form-group">
-          <textarea id="jsonInput" class="form-control" style="height: 54px; font-family: var(--font-mono); font-size: 10px;" placeholder='2. Dán JSON kết quả từ ChatGPT tại đây: {"answers": {"1": [0]}}'></textarea>
+          <textarea id="jsonInput" class="form-control" style="height: 54px; font-family: var(--font-mono); font-size: 10px;" placeholder='2. Dán JSON kết quả từ ChatGPT / Gemini tại đây: {"answers": {"1": [0]}}'></textarea>
         </div>
 
         <button id="applyJsonBtn" class="btn btn-primary">

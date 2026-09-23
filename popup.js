@@ -480,16 +480,24 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- 7. COPY QUIZ PROMPT (ZERO-KEY MODE) ---
     if (copyQuizBtn) {
         copyQuizBtn.addEventListener('click', async () => {
-            switchToTab('tab-log');
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
             setRunningState(true, "Cào đề");
             log("📋 Đang cào toàn bộ câu hỏi và tạo prompt chuẩn...");
+            const originalText = copyQuizBtn.textContent;
+            copyQuizBtn.textContent = "⏳ Đang cào đề thi...";
+
             chrome.tabs.sendMessage(tab.id, { action: "COPY_QUIZ_PROMPT" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy chắc chắn bạn đang mở trang bài thi (Quiz Attempt)!");
                     setRunningState(false);
+                    copyQuizBtn.textContent = originalText;
+                } else {
+                    copyQuizBtn.textContent = "✅ Đã copy vào Clipboard!";
+                    setTimeout(() => {
+                        copyQuizBtn.textContent = originalText;
+                    }, 3000);
                 }
             });
         });
