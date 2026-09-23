@@ -534,7 +534,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }, 4000);
                 } else if (response && response.error === "no_questions") {
                     copyQuizBtn.textContent = "❌ Không thấy câu hỏi";
-                    log("❌ Không tìm thấy câu hỏi nào! Hãy chắc chắn bạn đã bấm Start/Resume vào bài thi.");
+                    log("❌ Không tìm thấy câu hỏi nào! Hãy chắc chắn bạn đang ở trang bài thi hoặc bài thực hành (Quiz / Practice / Lab).");
                     setTimeout(() => {
                         copyQuizBtn.textContent = originalText;
                     }, 4000);

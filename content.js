@@ -316,29 +316,136 @@ function extractJsonFromText(rawText) {
 // QUIZ DOM PARSER & HELPER FUNCTIONS
 // ============================================================
 
-function extractQuizQuestions() {
-    const questions = [];
-    
-    // Strategy 1: Find dedicated question block containers on Coursera
-    let questionBlocks = Array.from(document.querySelectorAll(
-        'div[data-testid^="part-Submission_Form_"], div[data-testid*="question-container"], div[data-testid*="question-block"], div[data-testid*="QuestionBlock"], .rc-FormPartsQuestion, .rc-QuizQuestion'
-    ));
+function getAllSearchDocuments() {
+    const docs = [document];
+    try {
+        const iframes = document.querySelectorAll('iframe');
+        iframes.forEach(ifr => {
+            try {
+                if (ifr.contentDocument && ifr.contentDocument.body) {
+                    docs.push(ifr.contentDocument);
+                }
+            } catch (_) {}
+        });
+    } catch (_) {}
+    return docs;
+}
 
-    // Fallback: If no dedicated class wrappers found, try fieldset
-    if (questionBlocks.length === 0) {
-        questionBlocks = Array.from(document.querySelectorAll('fieldset[class*="Question"], fieldset'));
+function findCourseraStartButton(rootDoc = null) {
+    const candidateSelectors = [
+        'button[data-testid*="start" i]',
+        'button[data-testid*="attempt" i]',
+        'button[data-testid*="practice" i]',
+        'button[data-testid*="quiz" i]',
+        'button[data-e2e*="start" i]',
+        'button[data-e2e*="attempt" i]',
+        'button[data-e2e*="practice" i]',
+        'a[data-testid*="start" i]',
+        'a[data-testid*="attempt" i]',
+        'a[data-testid*="practice" i]',
+        'button',
+        'a[role="button"]',
+        'a.cds-button'
+    ];
+    const keywords = [
+        'start assignment', 'start attempt', 'resume assignment', 'resume', 'retake',
+        'start quiz', 'take quiz', 'start practice', 'practice quiz', 'practice',
+        'continue', 'try again', 'begin', 'go to quiz', 'launch', 'start',
+        'bắt đầu', 'làm bài', 'luyện tập', 'thực hành', 'tiếp tục', 'thử lại', 'làm lại',
+        'vào thi', 'bắt đầu làm bài', 'bắt đầu bài tập', 'bắt đầu luyện tập', 'bắt đầu thực hành'
+    ];
+
+    const docs = rootDoc ? [rootDoc] : getAllSearchDocuments();
+    for (const doc of docs) {
+        for (const sel of candidateSelectors) {
+            const els = Array.from(doc.querySelectorAll(sel));
+            for (const el of els) {
+                const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+                const text = ((el.innerText || el.textContent || '') + ' ' + ariaLabel).trim().toLowerCase();
+                if (!text || text.length > 60) continue;
+                if (text.includes('submit') || text.includes('nộp bài') || text.includes('close') || text.includes('đóng')) continue;
+
+                if (keywords.some(k => text === k || text.startsWith(k) || text.includes(k))) {
+                    try {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) {
+                            return el;
+                        }
+                    } catch (_) {
+                        return el;
+                    }
+                }
+            }
+        }
     }
+    return null;
+}
 
-    // Filter out parent containers that contain nested question containers (keep individual question blocks)
+function extractQuizQuestionsFromDoc(doc) {
+    const questions = [];
+
+    const questionSelectors = [
+        // Standard Graded Quizzes & Exams
+        'div[data-testid^="part-Submission_Form_"]',
+        '.rc-FormPartsQuestion',
+        '.rc-QuizQuestion',
+
+        // Practice Quizzes, Ungraded Quizzes & Lab Widgets
+        'div[data-testid*="practice" i]',
+        'div[data-testid*="ungraded" i]',
+        '.rc-PracticeQuiz',
+        'div[class*="PracticeQuiz"]',
+        '.rc-UngradedWidget',
+        'div[class*="UngradedWidget"]',
+        'div[class*="SingleQuestionView"]',
+        '.rc-SingleQuestionView',
+        'div[class*="QuestionContainer"]',
+        'div[class*="question-container"]',
+        'div[data-testid*="quiz-question" i]',
+        'div[data-testid*="item-question" i]',
+        'div[data-testid*="single-question" i]',
+        'div[data-testid*="question-block" i]',
+        'div[data-testid*="QuestionBlock" i]',
+        'div[data-testid*="QuestionGroup" i]',
+        'div[data-e2e*="question" i]',
+        'div[class*="ItemQuestion"]',
+        '.rc-ItemQuestions',
+        '.rc-ItemQuestionsWrapper',
+
+        // ARIA Question Regions
+        'div[role="region"][aria-label*="Question" i]',
+        'div[role="region"][aria-label*="Câu hỏi" i]',
+        'div[role="region"][data-testid*="question" i]',
+
+        // In-Video & Interactive Lab Quizzes
+        '.rc-InVideoQuiz',
+        'div[class*="InVideoQuiz"]',
+
+        // Fieldsets
+        'fieldset[class*="Question"]',
+        'fieldset'
+    ];
+
+    // Strategy 1: Find dedicated question block containers
+    let questionBlocks = Array.from(doc.querySelectorAll(questionSelectors.join(', ')));
+
+    // Filter out parent containers that contain nested question containers
     questionBlocks = questionBlocks.filter(block => {
         return !questionBlocks.some(other => other !== block && block.contains(other));
     });
 
     // Strategy 2: If no structured blocks or only 1 big block containing all inputs (e.g. form wrapper)
     if (questionBlocks.length <= 1) {
-        const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], select, textarea, input[type="text"], input[type="number"]'));
-        
-        // Group by input.name (for radios) or by common nearest container
+        let allInputs = Array.from(doc.querySelectorAll(
+            'input[type="radio"], input[type="checkbox"], select, textarea, input[type="text"], input[type="number"], [role="radio"], [role="checkbox"], [role="option"], button[aria-checked]'
+        ));
+
+        // Filter out nested duplicates
+        allInputs = allInputs.filter(inp => {
+            return !allInputs.some(other => other !== inp && inp.contains(other));
+        });
+
+        // Group by input.name (for native radios) or by nearest question/radiogroup container
         const groups = new Map();
         allInputs.forEach((inp, idx) => {
             if (inp.id && inp.id.includes('agreement')) return;
@@ -346,10 +453,13 @@ function extractQuizQuestions() {
             if (inp.type === 'hidden') return;
 
             let groupKey;
+            const radioGroup = inp.closest('[role="radiogroup"], [role="group"], div[class*="Question" i], div[class*="question" i], div[data-testid*="question" i], fieldset');
             if (inp.type === 'radio' && inp.name) {
                 groupKey = `radio_${inp.name}`;
+            } else if (radioGroup) {
+                groupKey = radioGroup;
             } else {
-                const container = inp.closest('div[role="group"], div[data-testid], fieldset, li, tr, div[class*="Part"]') || inp.parentElement?.parentElement || inp.parentElement;
+                const container = inp.closest('fieldset, li, tr, div[class*="Part"], div[data-testid]') || inp.parentElement?.parentElement || inp.parentElement;
                 groupKey = container || `input_${idx}`;
             }
 
@@ -364,9 +474,9 @@ function extractQuizQuestions() {
         for (const [key, inputs] of groups.entries()) {
             const firstInp = inputs[0];
             const container = firstInp.closest('div[role="group"], div[data-testid], fieldset, div[class*="Question"]') || firstInp.parentElement?.parentElement || firstInp.parentElement;
-            
+
             let qType = "single";
-            if (firstInp.type === 'checkbox') qType = "multiple";
+            if (firstInp.type === 'checkbox' || firstInp.getAttribute('role') === 'checkbox') qType = "multiple";
             else if (firstInp.tagName === 'SELECT') qType = "dropdown";
             else if (firstInp.tagName === 'TEXTAREA' || firstInp.type === 'text' || firstInp.type === 'number') qType = "text";
 
@@ -378,18 +488,35 @@ function extractQuizQuestions() {
                     '.rc-FormPart__options',
                     '.rc-Options',
                     '.rc-FormPartsQuestion__options',
-                    'div[class*="options-container"]',
+                    'div[class*="options-container" i]',
+                    'div[class*="OptionsContainer" i]',
+                    'div[data-testid*="options" i]',
+                    'div[data-testid*="Options" i]',
+                    'div[class*="choices" i]',
+                    'div[class*="Choices" i]',
+                    'div[data-testid*="choices" i]',
                     '[role="radiogroup"]',
                     '.rc-Option',
-                    'label:has(input)',
-                    'input[type="radio"]',
-                    'input[type="checkbox"]',
+                    'div[class*="Option" i]',
+                    'button[class*="Option" i]',
+                    '[role="option"]',
+                    '[role="radio"]',
+                    '[role="checkbox"]',
                     'span.rc-FormPart__points',
+                    'span[class*="points" i]',
+                    'span[class*="Points" i]',
+                    'div[class*="points" i]',
                     'button',
-                    'svg'
+                    'svg',
+                    '.screenreader-only',
+                    '.sr-only'
                 ];
                 optionsSelectorsToRemove.forEach(sel => {
                     cClone.querySelectorAll(sel).forEach(el => el.remove());
+                });
+                cClone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(inp => {
+                    const lbl = inp.closest('label');
+                    if (lbl) lbl.remove();
                 });
                 cClone.querySelectorAll('input[type="text"], input[type="number"], textarea').forEach(inp => {
                     const span = document.createElement('span');
@@ -425,10 +552,10 @@ function extractQuizQuestions() {
             } else if (qType !== "text") {
                 inputs.forEach((inp, oIndex) => {
                     const parentLabel = inp.closest('label');
-                    const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || parentLabel || inp.parentElement;
+                    const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], [role="option"], div[class*="Option" i], button[class*="Option" i]') || parentLabel || inp.parentElement;
                     const optContentEl = (parentOpt || parentLabel)?.querySelector?.('.rc-Option__text, [data-testid="cml-viewer"], .cml-viewer, .rc-FormPartsQuestion__option-text') || parentOpt || parentLabel;
                     let optText = formatCourseraNodeToMarkdown(optContentEl);
-                    if (!optText) optText = inp.value || `Lựa chọn ${oIndex + 1}`;
+                    if (!optText) optText = inp.value || inp.innerText || inp.textContent || `Lựa chọn ${oIndex + 1}`;
                     optText = optText.replace(/^(?:[a-zA-Z][\.\)\:]|\d+[\)\:]|\d+\.)\s+/i, '').trim();
                     options.push({
                         index: oIndex,
@@ -456,7 +583,6 @@ function extractQuizQuestions() {
 
     // Process structured questionBlocks
     questionBlocks.forEach((qEl, qIndex) => {
-        // Query inputs safely: native inputs first to prevent duplicate options from role="radio" wrappers
         let radioInputs = Array.from(qEl.querySelectorAll('input[type="radio"]'));
         if (radioInputs.length === 0) {
             radioInputs = Array.from(qEl.querySelectorAll('[role="radio"]'));
@@ -466,7 +592,23 @@ function extractQuizQuestions() {
             checkInputs = Array.from(qEl.querySelectorAll('[role="checkbox"]'));
         }
         const selectInputs = Array.from(qEl.querySelectorAll('select'));
-        const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"]'));
+        const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"], input[type="number"]'));
+
+        // Custom options in practice quizzes & ungraded widgets
+        if (radioInputs.length === 0 && checkInputs.length === 0 && selectInputs.length === 0 && textInputs.length === 0) {
+            const customOptions = Array.from(qEl.querySelectorAll(
+                '[role="option"], button[aria-checked], div[aria-checked], .rc-Option, div[class*="Option" i], button[class*="Option" i], div[data-testid*="option-item" i]'
+            )).filter(el => !el.querySelector('[role="option"], button[aria-checked], .rc-Option'));
+
+            if (customOptions.length > 0) {
+                const isMulti = customOptions.some(el => el.getAttribute('role') === 'checkbox' || el.getAttribute('aria-multiselectable') === 'true');
+                if (isMulti) {
+                    checkInputs = customOptions;
+                } else {
+                    radioInputs = customOptions;
+                }
+            }
+        }
 
         let qType = "single";
         let inputElements = radioInputs;
@@ -494,20 +636,25 @@ function extractQuizQuestions() {
             '.rc-FormPart__options',
             '.rc-Options',
             '.rc-FormPartsQuestion__options',
-            'div[class*="options-container"]',
-            'div[class*="OptionsContainer"]',
-            'div[data-testid*="options"]',
-            'div[data-testid*="Options"]',
+            'div[class*="options-container" i]',
+            'div[class*="OptionsContainer" i]',
+            'div[data-testid*="options" i]',
+            'div[data-testid*="Options" i]',
+            'div[class*="choices" i]',
+            'div[class*="Choices" i]',
+            'div[data-testid*="choices" i]',
             '[role="radiogroup"]',
             '.rc-Option',
-            'div[class*="Option"]',
-            'label:has(input)',
-            'input[type="radio"]',
-            'input[type="checkbox"]',
+            'div[class*="Option" i]',
+            'button[class*="Option" i]',
+            '[role="option"]',
+            '[role="radio"]',
+            '[role="checkbox"]',
             'select',
             'span.rc-FormPart__points',
-            'span[class*="points"]',
-            'span[class*="Points"]',
+            'span[class*="points" i]',
+            'span[class*="Points" i]',
+            'div[class*="points" i]',
             'button',
             'svg',
             '.screenreader-only',
@@ -515,6 +662,11 @@ function extractQuizQuestions() {
         ];
         optionsSelectorsToRemove.forEach(sel => {
             qClone.querySelectorAll(sel).forEach(el => el.remove());
+        });
+
+        qClone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(inp => {
+            const lbl = inp.closest('label');
+            if (lbl) lbl.remove();
         });
 
         // 3. Convert any fill-in-the-blank input into a visible blank token [____]
@@ -542,7 +694,13 @@ function extractQuizQuestions() {
                 ".rc-FormPart__question-text",
                 "div.rc-QuestionBody",
                 "[data-e2e='question-text']",
+                "[data-testid*='question-text' i]",
                 ".rc-QuestionText",
+                "div[class*='QuestionPrompt' i]",
+                "div[class*='question-prompt' i]",
+                "div[class*='QuestionText' i]",
+                "div.rc-CML",
+                "[data-testid='cml-viewer']",
                 "h3", "h4"
             ];
             for (const sel of fallbackSelectors) {
@@ -576,10 +734,10 @@ function extractQuizQuestions() {
         } else if (qType !== "text") {
             inputElements.forEach((inp, oIndex) => {
                 const parentLabel = inp.closest('label');
-                const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], div[class*="Option"]') || parentLabel || inp.parentElement;
+                const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], [role="option"], div[class*="Option" i], button[class*="Option" i]') || parentLabel || inp.parentElement;
                 const optContentEl = (parentOpt || parentLabel)?.querySelector?.('.rc-Option__text, [data-testid="cml-viewer"], .cml-viewer, .rc-FormPartsQuestion__option-text') || parentOpt || parentLabel;
                 let optText = formatCourseraNodeToMarkdown(optContentEl);
-                if (!optText) optText = inp.value || `Lựa chọn ${oIndex + 1}`;
+                if (!optText) optText = inp.value || inp.innerText || inp.textContent || `Lựa chọn ${oIndex + 1}`;
                 optText = optText.replace(/^(?:[a-zA-Z][\.\)\:]|\d+[\)\:]|\d+\.)\s+/i, '').trim();
                 options.push({
                     index: oIndex,
@@ -602,6 +760,17 @@ function extractQuizQuestions() {
     });
 
     return questions;
+}
+
+function extractQuizQuestions(rootDoc = null) {
+    const docsToSearch = rootDoc ? [rootDoc] : getAllSearchDocuments();
+    for (const doc of docsToSearch) {
+        const questions = extractQuizQuestionsFromDoc(doc);
+        if (questions && questions.length > 0) {
+            return questions;
+        }
+    }
+    return [];
 }
 
 function generateQuizPrompt(questions) {
@@ -1958,28 +2127,33 @@ class SkiperaJS {
         };
         safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
 
-        log(`🧠 [v2.4 Engine] Bắt đầu quét câu hỏi đề thi...`);
-        let questions = extractQuizQuestions();
+        log(`🧠 [v2.4 Engine] Bắt đầu quét câu hỏi đề thi / bài thực hành...`);
+        // Step 1: Initial polling for React SPA component rendering (up to 3s)
+        let questions = [];
+        for (let attempt = 0; attempt < 6; attempt++) {
+            questions = extractQuizQuestions();
+            if (questions.length > 0) break;
+            if (attempt < 5) await new Promise(r => setTimeout(r, 500));
+        }
 
+        // Step 2: If no questions, check if we need to click Start / Practice / Resume
         if (questions.length === 0) {
-            // Check if user is on the cover page with Start/Resume/Retake button
-            const buttons = Array.from(document.querySelectorAll('button, a'));
-            const startBtn = buttons.find(b => {
-                const t = b.textContent.trim().toLowerCase();
-                return ['start assignment', 'start attempt', 'resume assignment', 'resume', 'retake', 'start quiz', 'take quiz', 'bắt đầu', 'làm bài', 'try again'].some(k => t.includes(k));
-            });
+            const startBtn = findCourseraStartButton();
             if (startBtn) {
-                log("ℹ️ Phát hiện nút vào thi. Đang tự động mở bài thi...");
+                log("ℹ️ Phát hiện nút vào thi / thực hành. Đang tự động mở bài...");
                 startBtn.click();
-                await new Promise(r => setTimeout(r, 4000));
-                questions = extractQuizQuestions();
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    await new Promise(r => setTimeout(r, 500));
+                    questions = extractQuizQuestions();
+                    if (questions.length > 0) break;
+                }
             }
         }
 
         if (questions.length === 0) {
             this.isRunning = false;
             log("❌ Không tìm thấy câu hỏi trắc nghiệm nào trên trang hiện tại!");
-            log("👉 Hãy chắc chắn bạn đã nhấn 'Start' hoặc 'Resume' trên Coursera để vào màn hình có câu hỏi!");
+            log("👉 Hãy chắc chắn bạn đang ở trang bài thi hoặc bài thực hành (Quiz / Practice Attempt)!");
             safeSendMessage({ action: "FINISHED" });
             return;
         }
@@ -2048,29 +2222,32 @@ class SkiperaJS {
 
     // --- ZERO-KEY MODE: COPY PROMPT ---
     async copyQuizPrompt() {
-        log("📋 Đang cào toàn bộ câu hỏi đề thi...");
-        let questions = extractQuizQuestions();
+        log("📋 Đang cào toàn bộ câu hỏi đề thi / bài thực hành...");
+        
+        // Step 1: Initial polling for React SPA component rendering (up to 3s)
+        let questions = [];
+        for (let attempt = 0; attempt < 6; attempt++) {
+            questions = extractQuizQuestions();
+            if (questions.length > 0) break;
+            if (attempt < 5) await new Promise(r => setTimeout(r, 500));
+        }
 
+        // Step 2: If no questions, check if we need to click Start / Practice / Resume
         if (questions.length === 0) {
-            const buttons = Array.from(document.querySelectorAll('button, a'));
-            const startBtn = buttons.find(b => {
-                const t = b.textContent.trim().toLowerCase();
-                return ['start assignment', 'start attempt', 'resume', 'retake', 'start quiz', 'take quiz', 'bắt đầu'].some(k => t.includes(k));
-            });
+            const startBtn = findCourseraStartButton();
             if (startBtn) {
-                log("ℹ️ Phát hiện nút vào thi. Đang tự động mở bài thi...");
+                log("ℹ️ Phát hiện nút vào thi / thực hành. Đang tự động mở bài...");
                 startBtn.click();
-                await new Promise(r => setTimeout(r, 3500));
-                questions = extractQuizQuestions();
-            } else {
-                // Short wait in case Coursera React is still rendering questions
-                await new Promise(r => setTimeout(r, 1200));
-                questions = extractQuizQuestions();
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    await new Promise(r => setTimeout(r, 500));
+                    questions = extractQuizQuestions();
+                    if (questions.length > 0) break;
+                }
             }
         }
 
         if (questions.length === 0) {
-            log("❌ Không tìm thấy câu hỏi nào! Hãy đảm bảo bạn đang ở trang bài thi (Quiz Attempt).");
+            log("❌ Không tìm thấy câu hỏi nào! Hãy đảm bảo bạn đang ở trang bài thi hoặc bài thực hành (Quiz / Practice Attempt).");
             safeSendMessage({ action: "FINISHED" });
             return { success: false, error: "no_questions" };
         }
