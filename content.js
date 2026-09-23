@@ -81,20 +81,28 @@ const DISCUSSION_TEMPLATES = [
 // Clipboard helper
 async function copyTextToClipboard(text) {
     try {
-        await navigator.clipboard.writeText(text);
-        return true;
-    } catch (e) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (_) {}
+
+    try {
         const textArea = document.createElement("textarea");
         textArea.value = text;
         textArea.style.position = "fixed";
         textArea.style.left = "-999999px";
         textArea.style.top = "-999999px";
+        textArea.setAttribute('readonly', '');
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
+        textArea.setSelectionRange(0, 999999);
         const success = document.execCommand('copy');
         document.body.removeChild(textArea);
-        return success;
+        return !!success;
+    } catch (_) {
+        return false;
     }
 }
 
@@ -313,10 +321,15 @@ function extractQuizQuestions() {
     
     // Strategy 1: Find dedicated question block containers on Coursera
     let questionBlocks = Array.from(document.querySelectorAll(
-        'div[data-testid^="part-Submission_Form_"], div[data-testid*="question-container"], div[data-testid*="question-block"], div[data-testid*="QuestionBlock"], .rc-FormPartsQuestion, .rc-QuizQuestion, fieldset[class*="Question"], fieldset'
+        'div[data-testid^="part-Submission_Form_"], div[data-testid*="question-container"], div[data-testid*="question-block"], div[data-testid*="QuestionBlock"], .rc-FormPartsQuestion, .rc-QuizQuestion'
     ));
 
-    // Filter out parent containers that contain nested question containers (keep leaf question blocks)
+    // Fallback: If no dedicated class wrappers found, try fieldset
+    if (questionBlocks.length === 0) {
+        questionBlocks = Array.from(document.querySelectorAll('fieldset[class*="Question"], fieldset'));
+    }
+
+    // Filter out parent containers that contain nested question containers (keep individual question blocks)
     questionBlocks = questionBlocks.filter(block => {
         return !questionBlocks.some(other => other !== block && block.contains(other));
     });
@@ -2049,13 +2062,17 @@ class SkiperaJS {
                 startBtn.click();
                 await new Promise(r => setTimeout(r, 3500));
                 questions = extractQuizQuestions();
+            } else {
+                // Short wait in case Coursera React is still rendering questions
+                await new Promise(r => setTimeout(r, 1200));
+                questions = extractQuizQuestions();
             }
         }
 
         if (questions.length === 0) {
             log("❌ Không tìm thấy câu hỏi nào! Hãy đảm bảo bạn đang ở trang bài thi (Quiz Attempt).");
             safeSendMessage({ action: "FINISHED" });
-            return;
+            return { success: false, error: "no_questions" };
         }
 
         const prompt = generateQuizPrompt(questions);
@@ -2065,9 +2082,10 @@ class SkiperaJS {
             log(`✅ ĐÃ COPY ĐỀ THI (${questions.length} câu) VÀO CLIPBOARD!`);
             log("👉 Hãy mở ChatGPT / Gemini Web, nhấn Ctrl+V để dán và lấy kết quả JSON.");
         } else {
-            log("⚠️ Không thể tự động copy vào clipboard. Hãy kiểm tra quyền trình duyệt.");
+            log(`📋 Đã tạo xong đề thi (${questions.length} câu). Đang truyền sang Popup để lưu clipboard...`);
         }
         safeSendMessage({ action: "FINISHED" });
+        return { success: true, count: questions.length, prompt: prompt, copied: copied };
     }
 
     // --- ZERO-KEY MODE: APPLY JSON ANSWERS ---
@@ -2198,8 +2216,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ status: "processing" });
     } else if (request.action === "COPY_QUIZ_PROMPT") {
         activeSkipper = activeSkipper || new SkiperaJS();
-        activeSkipper.copyQuizPrompt();
-        sendResponse({ status: "processing" });
+        activeSkipper.copyQuizPrompt().then(result => {
+            sendResponse(result || { success: true });
+        }).catch(err => {
+            sendResponse({ success: false, error: err.message });
+        });
+        return true;
     } else if (request.action === "APPLY_QUIZ_ANSWERS") {
         activeSkipper = activeSkipper || new SkiperaJS();
         activeSkipper.applyAnswersFromJson(request.jsonAnswers);

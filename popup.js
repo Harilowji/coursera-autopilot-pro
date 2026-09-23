@@ -493,16 +493,53 @@ document.addEventListener('DOMContentLoaded', function () {
             const originalText = copyQuizBtn.textContent;
             copyQuizBtn.textContent = "⏳ Đang cào đề thi...";
 
-            chrome.tabs.sendMessage(tab.id, { action: "COPY_QUIZ_PROMPT" }, (response) => {
+            chrome.tabs.sendMessage(tab.id, { action: "COPY_QUIZ_PROMPT" }, async (response) => {
+                setRunningState(false);
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy chắc chắn bạn đang mở trang bài thi (Quiz Attempt)!");
-                    setRunningState(false);
                     copyQuizBtn.textContent = originalText;
-                } else {
-                    copyQuizBtn.textContent = "✅ Đã copy vào Clipboard!";
+                    return;
+                }
+
+                if (response && response.success && response.prompt) {
+                    let writeSuccess = false;
+                    // Primary: Copy directly in Popup context (holds direct user click gesture & clipboardWrite permission)
+                    try {
+                        await navigator.clipboard.writeText(response.prompt);
+                        writeSuccess = true;
+                    } catch (_) {
+                        try {
+                            const ta = document.createElement("textarea");
+                            ta.value = response.prompt;
+                            ta.style.position = "fixed";
+                            ta.style.opacity = "0";
+                            document.body.appendChild(ta);
+                            ta.focus();
+                            ta.select();
+                            writeSuccess = document.execCommand('copy');
+                            document.body.removeChild(ta);
+                        } catch (e2) {}
+                    }
+
+                    if (writeSuccess || response.copied) {
+                        copyQuizBtn.textContent = `✅ Đã copy ${response.count} câu!`;
+                        log(`✅ ĐÃ COPY ĐỀ THI (${response.count} câu) VÀO CLIPBOARD!`);
+                        log("👉 Hãy mở ChatGPT / Gemini Web, nhấn Ctrl+V để dán và lấy kết quả JSON.");
+                    } else {
+                        copyQuizBtn.textContent = "⚠️ Lỗi Clipboard";
+                        log("⚠️ Không thể tự động ghi vào clipboard. Hãy kiểm tra quyền trình duyệt.");
+                    }
                     setTimeout(() => {
                         copyQuizBtn.textContent = originalText;
-                    }, 3000);
+                    }, 4000);
+                } else if (response && response.error === "no_questions") {
+                    copyQuizBtn.textContent = "❌ Không thấy câu hỏi";
+                    log("❌ Không tìm thấy câu hỏi nào! Hãy chắc chắn bạn đã bấm Start/Resume vào bài thi.");
+                    setTimeout(() => {
+                        copyQuizBtn.textContent = originalText;
+                    }, 4000);
+                } else {
+                    copyQuizBtn.textContent = originalText;
                 }
             });
         });
