@@ -1,5 +1,5 @@
 // ============================================================
-// Coursera Autopilot Pro - Content Script v2.3
+// Coursera Autopilot Pro - Content Script v2.4
 // All-in-One: Skip Videos, Readings, Progress Audit, FAP Cert Extractor,
 // Auto Peer Review, Auto Discussion & Multi-Provider AI Quiz Solver
 // ============================================================
@@ -667,6 +667,9 @@ class SkiperaJS {
         this.slug = null;
         this.csrfToken = getCookie("CSRF3-Token") || getCookie("csrf3-token");
         this.isStopped = false;
+        this.isRunning = false;
+        this.currentTaskName = "";
+        this.lastProgress = { percent: 0, completed: 0, total: 0, itemName: "" };
         this.mode = mode; // 'safe' or 'turbo'
         this.completedIds = new Set();
 
@@ -677,7 +680,9 @@ class SkiperaJS {
 
     stop() {
         this.isStopped = true;
+        this.isRunning = false;
         log("🛑 Đang dừng tiến trình...");
+        safeSendMessage({ action: "FINISHED" });
     }
 
     getHeaders() {
@@ -755,12 +760,16 @@ class SkiperaJS {
 
         log("🔍 Đang tải danh sách bài học qua Coursera API...");
         try {
+            this.isRunning = true;
+            this.currentTaskName = this.mode === 'safe' ? "Safe Farm" : "Turbo Skip";
+
             const response = await fetch(BASE_URL + "onDemandCourseMaterials.v2/?" + params.toString(), {
                 headers: this.getHeaders()
             });
             const json = await response.json();
             if (!json.elements || json.elements.length === 0) {
                 log("❌ Không tìm thấy thông tin khóa học.");
+                this.isRunning = false;
                 safeSendMessage({ action: "FINISHED" });
                 return;
             }
@@ -775,20 +784,32 @@ class SkiperaJS {
             log(`📚 Tổng cộng ${items.length} bài học trong khóa.`);
 
             let processedCount = 0;
-            let skippedAlreadyDone = 0;
+            let alreadyCompletedCount = 0;
 
             // Send initial progress update
             const initialDone = this.completedIds.size;
-            const initPct = items.length > 0 ? ((initialDone / items.length) * 100).toFixed(0) : 0;
-            safeSendMessage({
-                action: "PROGRESS_UPDATE",
+            const initPct = items.length > 0 ? Math.round((initialDone / items.length) * 100) : 0;
+            this.lastProgress = {
                 percent: initPct,
                 completed: initialDone,
                 total: items.length,
-                itemName: "Bắt đầu quét..."
+                itemName: initialDone === items.length ? "Khóa học đã đủ 100%!" : "Khởi động quét bài học..."
+            };
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                ...this.lastProgress
             });
 
-            for (const item of items) {
+            if (items.length > 0 && initialDone === items.length) {
+                log("🎉 Toàn bộ bài học trong khóa đều đã hoàn thành trước đó!");
+                await this.getCertificateInfo();
+                this.isRunning = false;
+                safeSendMessage({ action: "FINISHED" });
+                return;
+            }
+
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
                 if (this.isStopped) {
                     log("⏹ Đã dừng theo yêu cầu.");
                     break;
@@ -796,46 +817,94 @@ class SkiperaJS {
 
                 // Check if already completed
                 if (this.completedIds.has(item.id)) {
-                    skippedAlreadyDone++;
+                    alreadyCompletedCount++;
+                    if (alreadyCompletedCount % 4 === 0 || alreadyCompletedCount === this.completedIds.size) {
+                        const curDone = alreadyCompletedCount + processedCount;
+                        const curPct = items.length > 0 ? Math.round((curDone / items.length) * 100) : 0;
+                        this.lastProgress = {
+                            percent: curPct,
+                            completed: curDone,
+                            total: items.length,
+                            itemName: `Đã xong: ${item.name}`
+                        };
+                        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+                    }
                     continue;
                 }
 
                 const typeName = item.contentSummary ? item.contentSummary.typeName : "";
+                let didAction = false;
+
                 if (typeName === "lecture") {
                     log(`[${++processedCount}] 🎬 Video: ${item.name}`);
+                    this.lastProgress = {
+                        percent: items.length > 0 ? Math.round(((alreadyCompletedCount + processedCount) / items.length) * 100) : 0,
+                        completed: alreadyCompletedCount + processedCount,
+                        total: items.length,
+                        itemName: `🎬 Video: ${item.name}`
+                    };
+                    safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
                     await this.watchItem(item);
+                    didAction = true;
                 } else if (typeName === "supplement" || typeName === "ungradedWidget") {
                     log(`[${++processedCount}] 📖 Reading: ${item.name}`);
+                    this.lastProgress = {
+                        percent: items.length > 0 ? Math.round(((alreadyCompletedCount + processedCount) / items.length) * 100) : 0,
+                        completed: alreadyCompletedCount + processedCount,
+                        total: items.length,
+                        itemName: `📖 Reading: ${item.name}`
+                    };
+                    safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
                     await this.readItem(item.id);
+                    didAction = true;
+                } else {
+                    // Graded quiz, exam, peer assignment
+                    continue;
                 }
 
-                // Send live progress update to popup
-                const currentDone = skippedAlreadyDone + processedCount;
-                const pct = items.length > 0 ? ((currentDone / items.length) * 100).toFixed(0) : 0;
-                safeSendMessage({
-                    action: "PROGRESS_UPDATE",
+                // Send live progress update after processing
+                const currentDone = alreadyCompletedCount + processedCount;
+                const pct = items.length > 0 ? Math.round((currentDone / items.length) * 100) : 0;
+                this.lastProgress = {
                     percent: pct,
                     completed: currentDone,
                     total: items.length,
                     itemName: item.name
+                };
+                safeSendMessage({
+                    action: "PROGRESS_UPDATE",
+                    ...this.lastProgress
                 });
 
-                // Delay between items based on mode
-                if (this.mode === 'safe') {
-                    const jitter = 2000 + Math.floor(Math.random() * 3000); // 2 - 5s
-                    await new Promise(r => setTimeout(r, jitter));
-                } else {
-                    await new Promise(r => setTimeout(r, 400));
+                // Delay between items based on mode only if action was taken
+                if (didAction) {
+                    if (this.mode === 'safe') {
+                        const jitter = 2000 + Math.floor(Math.random() * 3000); // 2 - 5s
+                        await new Promise(r => setTimeout(r, jitter));
+                    } else {
+                        await new Promise(r => setTimeout(r, 400));
+                    }
                 }
             }
 
+            this.isRunning = false;
             if (!this.isStopped) {
-                log(`🎉 Hoàn tất! Đã xử lý ${processedCount} bài học mới (${skippedAlreadyDone} bài cũ đã bỏ qua).`);
+                log(`🎉 Hoàn tất! Đã xử lý ${processedCount} bài học mới (${alreadyCompletedCount} bài cũ đã bỏ qua).`);
+                const finalDone = alreadyCompletedCount + processedCount;
+                const finalPct = items.length > 0 ? Math.min(100, Math.round((finalDone / items.length) * 100)) : 100;
+                this.lastProgress = {
+                    percent: finalPct,
+                    completed: finalDone,
+                    total: items.length,
+                    itemName: finalPct === 100 ? "Hoàn thành 100% khóa học!" : "Tiến trình hoàn tất!"
+                };
+                safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
                 // Auto check certificate
                 await this.getCertificateInfo();
             }
             safeSendMessage({ action: "FINISHED" });
         } catch (err) {
+            this.isRunning = false;
             log(`❌ Lỗi khi quét khóa học: ${err.message}`);
             safeSendMessage({ action: "FINISHED" });
         }
@@ -844,8 +913,12 @@ class SkiperaJS {
     // --- AUDIT TIẾN ĐỘ KHÓA HỌC (TÌM BÀI SÓT / 99% BUG) ---
     async auditCourse(slug) {
         this.slug = slug;
+        this.isRunning = true;
+        this.currentTaskName = "Audit 99%";
+
         const ok = await this.getUserId();
         if (!ok) {
+            this.isRunning = false;
             log("❌ Không lấy được thông tin tài khoản.");
             safeSendMessage({ action: "FINISHED" });
             return;
@@ -866,6 +939,7 @@ class SkiperaJS {
             });
             const json = await res.json();
             if (!json.elements || json.elements.length === 0) {
+                this.isRunning = false;
                 log("❌ Không tìm thấy thông tin khóa học.");
                 safeSendMessage({ action: "FINISHED" });
                 return;
@@ -904,15 +978,20 @@ class SkiperaJS {
                 }
             }
             log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            safeSendMessage({
-                action: "PROGRESS_UPDATE",
+            this.lastProgress = {
                 percent: Math.round(pct),
                 completed: completedCount,
                 total: items.length,
                 itemName: uncompleted.length === 0 ? "100% Hoàn tất!" : `Còn ${uncompleted.length} bài chưa xong`
+            };
+            safeSendMessage({
+                action: "PROGRESS_UPDATE",
+                ...this.lastProgress
             });
+            this.isRunning = false;
             safeSendMessage({ action: "FINISHED" });
         } catch (e) {
+            this.isRunning = false;
             log("❌ Lỗi kiểm tra tiến độ: " + e.message);
             safeSendMessage({ action: "FINISHED" });
         }
@@ -996,8 +1075,8 @@ class SkiperaJS {
             });
             const json = await response.json();
             return {
-                can_skip: !json.elements[0].disableSkippingForward,
-                tracking_id: json.linked["onDemandVideos.v1"][0].id
+                can_skip: !json.elements?.[0]?.disableSkippingForward,
+                tracking_id: json.linked?.["onDemandVideos.v1"]?.[0]?.id || itemId
             };
         } catch (e) {
             return null;
@@ -1066,7 +1145,8 @@ class SkiperaJS {
             await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 1200)));
         }
         const url = `${BASE_URL}onDemandSupplementCompletions.v1`;
-        const body = { courseId: this.courseId, itemId: itemId, userId: Number(this.userId) };
+        const numericUserId = !isNaN(Number(this.userId)) ? Number(this.userId) : this.userId;
+        const body = { courseId: this.courseId, itemId: itemId, userId: numericUserId };
         await fetch(url, {
             method: 'POST',
             headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
@@ -1398,6 +1478,11 @@ class SkiperaJS {
                         if (errMsg.includes('API_KEY_INVALID') || errMsg.toLowerCase().includes('api key not valid')) {
                             throw new Error("API Key Google Gemini không hợp lệ. Vui lòng kiểm tra lại key của bạn.");
                         }
+                        if (res.status === 429 || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted')) {
+                            console.warn(`Gemini model ${model} chạm quota (${errMsg}), thử model tiếp theo...`);
+                            lastError = new Error(`Resource has been exhausted (Quota Limit): ${errMsg}`);
+                            continue;
+                        }
                         console.warn(`Gemini model ${model} error (${errMsg}), thử model tiếp theo...`);
                         lastError = new Error(errMsg);
                         continue;
@@ -1492,7 +1577,17 @@ class SkiperaJS {
 
     // --- AUTO DO QUIZ (BATCH AI CALL) ---
     async autoDoQuiz(provider, apiKey) {
-        log(`🧠 [v2.3 Engine] Bắt đầu quét câu hỏi đề thi...`);
+        this.isRunning = true;
+        this.currentTaskName = `Quiz AI (${provider.toUpperCase()})`;
+        this.lastProgress = {
+            percent: 10,
+            completed: 1,
+            total: 4,
+            itemName: "Đang quét câu hỏi đề thi..."
+        };
+        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+
+        log(`🧠 [v2.4 Engine] Bắt đầu quét câu hỏi đề thi...`);
         let questions = extractQuizQuestions();
 
         if (questions.length === 0) {
@@ -1511,6 +1606,7 @@ class SkiperaJS {
         }
 
         if (questions.length === 0) {
+            this.isRunning = false;
             log("❌ Không tìm thấy câu hỏi trắc nghiệm nào trên trang hiện tại!");
             log("👉 Hãy chắc chắn bạn đã nhấn 'Start' hoặc 'Resume' trên Coursera để vào màn hình có câu hỏi!");
             safeSendMessage({ action: "FINISHED" });
@@ -1518,6 +1614,13 @@ class SkiperaJS {
         }
 
         log(`📝 Tìm thấy ${questions.length} câu hỏi. Đang tạo Batch Prompt gửi lên ${provider.toUpperCase()}...`);
+        this.lastProgress = {
+            percent: 35,
+            completed: 2,
+            total: 4,
+            itemName: `Gửi ${questions.length} câu lên ${provider.toUpperCase()}...`
+        };
+        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
         const prompt = generateQuizPrompt(questions);
 
         try {
@@ -1527,6 +1630,14 @@ class SkiperaJS {
                 throw new Error("Không thể phân tích dữ liệu JSON trả về từ AI.");
             }
 
+            this.lastProgress = {
+                percent: 75,
+                completed: 3,
+                total: 4,
+                itemName: "Đang điền đáp án vào bài thi..."
+            };
+            safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+
             log("🎯 Đã nhận đáp án từ AI! Tiến hành tích chọn trên giao diện bài thi...");
             const filled = await applyQuizAnswers(aiResponseJson, questions);
             if (filled > 0) {
@@ -1535,17 +1646,30 @@ class SkiperaJS {
             } else {
                 log("⚠️ AI đã phản hồi nhưng không khớp được ô nào để điền. Hãy kiểm tra lại màn hình câu hỏi!");
             }
+            this.lastProgress = {
+                percent: 100,
+                completed: 4,
+                total: 4,
+                itemName: `Hoàn tất giải ${questions.length} câu hỏi!`
+            };
+            safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+            this.isRunning = false;
             safeSendMessage({ action: "FINISHED" });
 
         } catch (e) {
+            this.isRunning = false;
             log(`❌ Lỗi gọi AI: ${e.message}`);
             if (e.message && e.message.includes('API_KEY_INVALID')) {
                 log("👉 Khóa API của bạn không đúng hoặc đã hết hạn. Hãy kiểm tra lại trong tab Quiz AI.");
             } else if (e.message && (e.message.includes('no credits') || e.message.includes('billing') || e.message.includes('insufficient_quota'))) {
                 log("💡 Tài khoản OpenAI của bạn đã hết số dư (0 credit).");
                 log("👉 Khuyên dùng: Đổi sang Google Gemini hoặc Groq trong tab Quiz AI (Hoàn toàn MIỄN PHÍ 100%, không cần nạp tiền), hoặc dùng chế độ Zero-Key!");
-            } else if (e.message && (e.message.includes('quota') || e.message.includes('exhausted'))) {
-                log("👉 Bạn đã chạm hạn mức miễn phí (Rate Limit/Quota). Hãy thử chuyển sang Groq Llama 3.3 hoặc dùng chế độ Zero-Key.");
+            } else if (e.message && (e.message.includes('quota') || e.message.includes('exhausted') || e.message.includes('429'))) {
+                log("⚠️ BẠN ĐÃ DÙNG HẾT HẠN MỨC MIỄN PHÍ TRONG NGÀY (Quota / 429 Too Many Requests) CỦA GOOGLE AI STUDIO!");
+                log("💡 3 CÁCH TIẾP TỤC GIẢI QUIZ NGAY LẬP TỨC:");
+                log("1️⃣ Đổi sang mô hình Groq (Llama 3.3 70B) trong tab Quiz AI: Miễn phí 100%, giải cực nhanh (1-2s), hạn mức độc lập hoàn toàn với Google! Lấy key miễn phí tại: https://console.groq.com/keys");
+                log("2️⃣ Dùng chế độ Không Cần Key (Zero-Key): Sang thẻ 'Không cần Key', bấm '1. Copy đề thi' ➔ Dán vào ChatGPT / Gemini Web ➔ Copy JSON dán vào ô ➔ Bấm 'Áp dụng'.");
+                log("3️⃣ Dùng tài khoản Google khác để tạo thêm 1 API Key mới tại: https://aistudio.google.com/app/apikey");
             }
             safeSendMessage({ action: "FINISHED" });
         }
@@ -1682,6 +1806,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             safeSendMessage({ action: "FINISHED" });
         });
         sendResponse({ status: "getting_cert" });
+    } else if (request.action === "GET_STATUS") {
+        const running = activeSkipper ? (!activeSkipper.isStopped && activeSkipper.isRunning) : false;
+        sendResponse({
+            isRunning: running,
+            taskName: activeSkipper?.currentTaskName || "",
+            progress: activeSkipper?.lastProgress || null,
+            mode: activeSkipper?.mode || 'safe'
+        });
+        return true;
     } else if (request.action === "STOP_SKIPPING") {
         if (activeSkipper) {
             activeSkipper.stop();
@@ -1690,28 +1823,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ status: "not_running" });
         }
     } else if (request.action === "AUTO_DISCUSSION") {
-        const skipper = activeSkipper || new SkiperaJS();
-        skipper.autoFillDiscussion();
+        activeSkipper = activeSkipper || new SkiperaJS();
+        activeSkipper.autoFillDiscussion();
         sendResponse({ status: "processing" });
     } else if (request.action === "AUTO_GRADE_PEER") {
-        const skipper = activeSkipper || new SkiperaJS();
-        skipper.autoGradePeer(request.count || 3);
+        activeSkipper = activeSkipper || new SkiperaJS();
+        activeSkipper.autoGradePeer(request.count || 3);
         sendResponse({ status: "processing" });
     } else if (request.action === "AUTO_DO_ASSIGNMENT") {
-        const skipper = activeSkipper || new SkiperaJS();
-        skipper.autoDoPeerAssignment();
+        activeSkipper = activeSkipper || new SkiperaJS();
+        activeSkipper.autoDoPeerAssignment();
         sendResponse({ status: "processing" });
     } else if (request.action === "AUTO_DO_QUIZ") {
-        const skipper = activeSkipper || new SkiperaJS();
-        skipper.autoDoQuiz(request.provider, request.apiKey);
+        activeSkipper = activeSkipper || new SkiperaJS();
+        activeSkipper.autoDoQuiz(request.provider, request.apiKey);
         sendResponse({ status: "processing" });
     } else if (request.action === "COPY_QUIZ_PROMPT") {
-        const skipper = activeSkipper || new SkiperaJS();
-        skipper.copyQuizPrompt();
+        activeSkipper = activeSkipper || new SkiperaJS();
+        activeSkipper.copyQuizPrompt();
         sendResponse({ status: "processing" });
     } else if (request.action === "APPLY_QUIZ_ANSWERS") {
-        const skipper = activeSkipper || new SkiperaJS();
-        skipper.applyAnswersFromJson(request.jsonAnswers);
+        activeSkipper = activeSkipper || new SkiperaJS();
+        activeSkipper.applyAnswersFromJson(request.jsonAnswers);
         sendResponse({ status: "processing" });
     } else {
         sendResponse({ status: "unknown_action" });

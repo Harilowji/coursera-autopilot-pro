@@ -32,6 +32,21 @@ document.addEventListener('DOMContentLoaded', function () {
     const certUrlInput = document.getElementById('certUrlInput');
     const copyCertBtn = document.getElementById('copyCertBtn');
 
+    // Global Monitor Elements
+    const globalMonitorCard = document.getElementById('globalMonitorCard');
+    const activeTaskName = document.getElementById('activeTaskName');
+    const globalProgressPercent = document.getElementById('globalProgressPercent');
+    const globalProgressFill = document.getElementById('globalProgressFill');
+    const globalItemName = document.getElementById('globalItemName');
+    const globalItemCount = document.getElementById('globalItemCount');
+    const globalStopBtn = document.getElementById('globalStopBtn');
+
+    if (globalStopBtn) {
+        globalStopBtn.addEventListener('click', () => {
+            if (stopBtn) stopBtn.click();
+        });
+    }
+
     // --- Theme Switcher Logic (Emerald, Cyan, Amber, Nordic) ---
     function applyTheme(themeName) {
         const validTheme = ['emerald', 'cyan', 'amber', 'nordic'].includes(themeName) ? themeName : 'cyan';
@@ -189,15 +204,54 @@ document.addEventListener('DOMContentLoaded', function () {
     function setRunningState(isRunning, customStatus = "") {
         if (startBtn) startBtn.disabled = isRunning;
         if (stopBtn) stopBtn.disabled = !isRunning;
+        if (globalStopBtn) globalStopBtn.disabled = !isRunning;
 
-        if (statusDot) {
-            if (isRunning) {
-                statusDot.className = "status-dot running";
-                if (statusText) statusText.textContent = customStatus || "Đang xử lý...";
-            } else {
-                statusDot.className = "status-dot";
-                if (statusText) statusText.textContent = "Sẵn sàng";
-            }
+        if (isRunning) {
+            if (globalMonitorCard) globalMonitorCard.style.display = 'block';
+            if (activeTaskName) activeTaskName.textContent = customStatus || "Đang xử lý...";
+            if (statusDot) statusDot.className = "status-dot running";
+            if (statusText) statusText.textContent = customStatus || "Đang chạy";
+            if (progressFill) progressFill.classList.add('running');
+            if (globalProgressFill) globalProgressFill.classList.add('running');
+        } else {
+            if (statusDot) statusDot.className = "status-dot";
+            if (statusText) statusText.textContent = "Sẵn sàng";
+            if (progressFill) progressFill.classList.remove('running');
+            if (globalProgressFill) globalProgressFill.classList.remove('running');
+            setTimeout(() => {
+                const stillRunning = statusDot && statusDot.classList.contains('running');
+                if (!stillRunning && globalMonitorCard) {
+                    globalMonitorCard.style.display = 'none';
+                }
+            }, 4500);
+        }
+    }
+
+    function updateProgressUI(data) {
+        const pct = data.percent !== undefined ? data.percent : 0;
+        const comp = data.completed !== undefined ? data.completed : 0;
+        const tot = data.total !== undefined ? data.total : 0;
+        const name = data.itemName || "";
+
+        if (progressContainer) progressContainer.style.display = 'block';
+        if (progressPercent) progressPercent.textContent = `${pct}%`;
+        if (progressFill) progressFill.style.width = `${pct}%`;
+        if (progressLabel && tot > 0) {
+            progressLabel.textContent = `Tiến độ: ${comp}/${tot} bài (${pct}%)`;
+        }
+
+        if (globalMonitorCard) globalMonitorCard.style.display = 'block';
+        if (globalProgressPercent) globalProgressPercent.textContent = `${pct}%`;
+        if (globalProgressFill) globalProgressFill.style.width = `${pct}%`;
+        if (globalItemName && name) {
+            globalItemName.textContent = name;
+            globalItemName.title = name;
+        }
+        if (globalItemCount && tot > 0) {
+            globalItemCount.textContent = `${comp}/${tot} bài`;
+        }
+        if (statusText && name) {
+            statusText.textContent = name.length > 20 ? name.substring(0, 18) + "..." : name;
         }
     }
 
@@ -417,7 +471,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     log("❌ Hãy mở trang làm bài thi (Quiz Attempt) rồi thử lại.");
                     setRunningState(false);
                 } else {
-                    log("🤖 [v2.3] Đang phân tích và xử lý câu hỏi...");
+                    log("🤖 [v2.4] Đang phân tích và xử lý câu hỏi...");
                 }
             });
         });
@@ -465,6 +519,20 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // --- Query Background / Tab Status on Startup ---
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+        if (tab && tab.url && tab.url.includes("coursera.org")) {
+            chrome.tabs.sendMessage(tab.id, { action: "GET_STATUS" }, (res) => {
+                if (!chrome.runtime.lastError && res && res.isRunning) {
+                    setRunningState(true, res.taskName);
+                    if (res.progress) {
+                        updateProgressUI(res.progress);
+                    }
+                }
+            });
+        }
+    });
+
     // --- Background / Content Script Message Listener ---
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === "LOG") {
@@ -473,23 +541,7 @@ document.addEventListener('DOMContentLoaded', function () {
             setRunningState(false);
             log("🏁 Tiến trình hoàn tất!");
         } else if (request.action === "PROGRESS_UPDATE") {
-            if (progressContainer) {
-                progressContainer.style.display = 'block';
-            }
-            if (progressPercent) {
-                progressPercent.textContent = `${request.percent}%`;
-            }
-            if (progressFill) {
-                progressFill.style.width = `${request.percent}%`;
-            }
-            if (progressLabel && request.completed !== undefined && request.total !== undefined) {
-                progressLabel.textContent = `Tiến độ: ${request.completed}/${request.total} bài (${request.percent}%)`;
-            }
-            if (request.itemName && statusText) {
-                statusText.textContent = request.itemName.length > 22 
-                    ? request.itemName.substring(0, 20) + "..." 
-                    : request.itemName;
-            }
+            updateProgressUI(request);
         } else if (request.action === "CERT_FOUND") {
             showCertBanner(request.verifyUrl, request.studentName);
             chrome.storage.local.set({
