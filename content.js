@@ -108,11 +108,13 @@ function formatCourseraNodeToMarkdown(containerEl) {
     // Deep clone so we do not mutate the live Coursera quiz DOM
     const clone = containerEl.cloneNode(true);
 
-    // 1. Remove unwanted noisy UI elements
+    // 1. Remove unwanted noisy UI elements (and code line numbers / copy buttons)
     const junkSelectors = [
         'input[type="radio"]', 'input[type="checkbox"]',
         'span.rc-FormPart__points', 'span[class*="points"]',
-        'span[class*="Points"]', 'button', 'svg', '.screenreader-only', 'span.sr-only'
+        'span[class*="Points"]', 'button', 'svg', '.screenreader-only', 'span.sr-only',
+        '.line-numbers-rows', '.line-number', '.linenumber', '.line-numbers', 'span.line-no', '.gutter',
+        'button.copy-code-button', 'button[class*="copy"]', '.cml-code-copy'
     ];
     junkSelectors.forEach(sel => {
         clone.querySelectorAll(sel).forEach(el => el.remove());
@@ -133,9 +135,41 @@ function formatCourseraNodeToMarkdown(containerEl) {
         }
     });
 
-    // 3. Format Code Blocks (<pre>, .cml-code, Prism / Highlight code)
-    clone.querySelectorAll('pre, .cml-code, div[class*="code-block"], div[class*="CodeBlock"]').forEach(preEl => {
-        const codeText = preEl.textContent.replace(/\r\n/g, '\n');
+    // 3. Format Code Blocks (<pre>, .cml-code, Prism / Highlight code, Ace, CodeMirror, Monaco)
+    const codeSelectors = 'pre, .cml-code, div[class*="code-block"], div[class*="CodeBlock"], .ace_editor, .CodeMirror, .cm-editor, .monaco-editor';
+    const allCodeNodes = Array.from(clone.querySelectorAll(codeSelectors));
+    // Filter to top-level code elements to avoid nested duplication or detached node errors
+    const topCodeNodes = allCodeNodes.filter(el => {
+        return !allCodeNodes.some(other => other !== el && other.contains(el));
+    });
+
+    topCodeNodes.forEach(preEl => {
+        let codeText = "";
+        if (preEl.querySelector('.ace_line')) {
+            codeText = Array.from(preEl.querySelectorAll('.ace_line')).map(l => l.textContent).join('\n');
+        } else if (preEl.querySelector('.CodeMirror-line, .cm-line')) {
+            codeText = Array.from(preEl.querySelectorAll('.CodeMirror-line, .cm-line')).map(l => l.textContent).join('\n');
+        } else if (preEl.querySelector('.view-line')) {
+            codeText = Array.from(preEl.querySelectorAll('.view-line')).map(l => l.textContent).join('\n');
+        } else {
+            codeText = preEl.textContent || "";
+        }
+
+        // Clean indentation, convert non-breaking spaces (\u00A0) to standard spaces, and decode entities
+        codeText = codeText
+            .replace(/\r\n/g, '\n')
+            .replace(/\u00a0/g, ' ')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
+
+        // Trim leading and trailing empty lines while preserving line indentation
+        const lines = codeText.split('\n');
+        while (lines.length > 0 && lines[0].trim() === '') lines.shift();
+        while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+        codeText = lines.join('\n');
         
         // Detect programming language
         let lang = "";
@@ -144,27 +178,29 @@ function formatCourseraNodeToMarkdown(containerEl) {
         if (langMatch) {
             lang = langMatch[1].toLowerCase();
         } else {
-            if (codeText.includes('def ') || codeText.includes('import ') || codeText.includes('print(') || codeText.includes('elif ')) {
+            if (codeText.includes('def ') || codeText.includes('import ') || codeText.includes('print(') || codeText.includes('elif ') || codeText.includes('__init__') || codeText.includes('self.')) {
                 lang = "python";
-            } else if (codeText.includes('#include <') || codeText.includes('int main(') || codeText.includes('printf(')) {
-                lang = "c";
-            } else if (codeText.includes('SELECT ') || codeText.includes('FROM ') || codeText.includes('WHERE ')) {
+            } else if (codeText.includes('#include <') || codeText.includes('int main(') || codeText.includes('printf(') || codeText.includes('cout <<')) {
+                lang = "cpp";
+            } else if (codeText.includes('SELECT ') || codeText.includes('FROM ') || codeText.includes('WHERE ') || codeText.includes('GROUP BY ')) {
                 lang = "sql";
-            } else if (codeText.includes('public class ') || codeText.includes('System.out.println')) {
+            } else if (codeText.includes('public class ') || codeText.includes('System.out.println') || codeText.includes('public static void main')) {
                 lang = "java";
-            } else if (codeText.includes('function ') || codeText.includes('const ') || codeText.includes('console.log')) {
+            } else if (codeText.includes('function ') || codeText.includes('const ') || codeText.includes('console.log') || codeText.includes('let ')) {
                 lang = "javascript";
+            } else if (codeText.includes('<html>') || codeText.includes('</div>') || codeText.includes('<!DOCTYPE')) {
+                lang = "html";
             }
         }
 
         const div = document.createElement('div');
-        div.textContent = `\n\`\`\`${lang}\n${codeText.trimEnd()}\n\`\`\`\n`;
+        div.textContent = `\n\n\`\`\`${lang}\n${codeText}\n\`\`\`\n\n`;
         preEl.replaceWith(div);
     });
 
     // 4. Format Inline Code (<code>, <kbd>, <tt>)
     clone.querySelectorAll('code, kbd, tt').forEach(codeEl => {
-        const text = codeEl.textContent.trim();
+        const text = codeEl.textContent.trim().replace(/\u00a0/g, ' ');
         if (text) {
             const span = document.createElement('span');
             span.textContent = ` \`${text}\` `;
@@ -324,12 +360,43 @@ function extractQuizQuestions() {
             // Extract question text
             let qText = "";
             if (container) {
-                const textEl = container.querySelector('.rc-CML, [data-testid="cml-viewer"], legend, .rc-FormPart__question-text, .rc-QuestionText, h3, h4');
-                if (textEl) qText = formatCourseraNodeToMarkdown(textEl);
-                else {
-                    const ancestor = container.parentElement;
-                    const ancestorTextEl = ancestor ? ancestor.querySelector('.rc-CML, legend, h3, h4, [data-testid*="question"]') : null;
-                    if (ancestorTextEl) qText = formatCourseraNodeToMarkdown(ancestorTextEl);
+                const cClone = container.cloneNode(true);
+                const optionsSelectorsToRemove = [
+                    '.rc-FormPart__options',
+                    '.rc-Options',
+                    '.rc-FormPartsQuestion__options',
+                    'div[class*="options-container"]',
+                    '[role="radiogroup"]',
+                    '.rc-Option',
+                    'label:has(input)',
+                    'input[type="radio"]',
+                    'input[type="checkbox"]',
+                    'span.rc-FormPart__points',
+                    'button',
+                    'svg'
+                ];
+                optionsSelectorsToRemove.forEach(sel => {
+                    cClone.querySelectorAll(sel).forEach(el => el.remove());
+                });
+                cClone.querySelectorAll('input[type="text"], input[type="number"], textarea').forEach(inp => {
+                    const span = document.createElement('span');
+                    span.textContent = ' [____] ';
+                    inp.replaceWith(span);
+                });
+
+                let parsed = formatCourseraNodeToMarkdown(cClone);
+                parsed = parsed.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '').replace(/\d+\s*điểm/gi, '').trim();
+                parsed = parsed.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
+                if (parsed.length > 5) {
+                    qText = parsed;
+                } else {
+                    const textEl = container.querySelector('.rc-CML, [data-testid="cml-viewer"], legend, .rc-FormPart__question-text, .rc-QuestionText, h3, h4');
+                    if (textEl) qText = formatCourseraNodeToMarkdown(textEl);
+                    else {
+                        const ancestor = container.parentElement;
+                        const ancestorTextEl = ancestor ? ancestor.querySelector('.rc-CML, legend, h3, h4, [data-testid*="question"]') : null;
+                        if (ancestorTextEl) qText = formatCourseraNodeToMarkdown(ancestorTextEl);
+                    }
                 }
             }
             if (!qText) qText = `Câu hỏi ${qIdx + 1}`;
@@ -403,37 +470,80 @@ function extractQuizQuestions() {
 
         if (inputElements.length === 0 && selectInputs.length === 0) return;
 
-        // Extract full question text
+        // Extract full question text preserving ALL code blocks, paragraphs, and formulas
         let qText = "";
-        const contentSelectors = [
-            "div.rc-CML",
-            "div[data-testid='cml-viewer']",
-            "div[data-testid='legend']",
-            "legend",
-            ".rc-FormPart__question-text",
-            "div.rc-QuestionBody",
-            "[data-e2e='question-text']",
-            ".rc-QuestionText",
-            "h3", "h4"
-        ];
 
-        for (const sel of contentSelectors) {
-            const el = qEl.querySelector(sel);
-            if (el && (el.innerText || el.textContent || "").trim().length > 5) {
-                qText = formatCourseraNodeToMarkdown(el);
-                break;
+        // 1. Clone question container so we can strip options cleanly without touching live DOM
+        const qClone = qEl.cloneNode(true);
+
+        // 2. Remove all options and input containers from clone
+        const optionsSelectorsToRemove = [
+            '.rc-FormPart__options',
+            '.rc-Options',
+            '.rc-FormPartsQuestion__options',
+            'div[class*="options-container"]',
+            'div[class*="OptionsContainer"]',
+            'div[data-testid*="options"]',
+            'div[data-testid*="Options"]',
+            '[role="radiogroup"]',
+            '.rc-Option',
+            'div[class*="Option"]',
+            'label:has(input)',
+            'input[type="radio"]',
+            'input[type="checkbox"]',
+            'select',
+            'span.rc-FormPart__points',
+            'span[class*="points"]',
+            'span[class*="Points"]',
+            'button',
+            'svg',
+            '.screenreader-only',
+            '.sr-only'
+        ];
+        optionsSelectorsToRemove.forEach(sel => {
+            qClone.querySelectorAll(sel).forEach(el => el.remove());
+        });
+
+        // 3. Convert any fill-in-the-blank input into a visible blank token [____]
+        qClone.querySelectorAll('input[type="text"], input[type="number"], textarea').forEach(inp => {
+            const span = document.createElement('span');
+            span.textContent = ' [____] ';
+            inp.replaceWith(span);
+        });
+
+        // 4. Format everything that remains (text, code blocks, math, tables)
+        let fullText = formatCourseraNodeToMarkdown(qClone);
+        fullText = fullText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '');
+        fullText = fullText.replace(/\d+(?:\.\d+)?\s*points?/gi, '');
+        fullText = fullText.replace(/\d+\s*điểm/gi, '');
+        fullText = fullText.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
+
+        if (fullText.length > 5) {
+            qText = fullText;
+        }
+
+        // Fallback: If stripping options removed too much, try targeted question selectors
+        if (!qText) {
+            const fallbackSelectors = [
+                "legend",
+                ".rc-FormPart__question-text",
+                "div.rc-QuestionBody",
+                "[data-e2e='question-text']",
+                ".rc-QuestionText",
+                "h3", "h4"
+            ];
+            for (const sel of fallbackSelectors) {
+                const el = qEl.querySelector(sel);
+                if (el && (el.innerText || el.textContent || "").trim().length > 3) {
+                    qText = formatCourseraNodeToMarkdown(el);
+                    break;
+                }
             }
         }
 
         if (!qText) {
-            qText = formatCourseraNodeToMarkdown(qEl);
-            qText = qText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '');
-            qText = qText.replace(/\d+(?:\.\d+)?\s*points?/gi, '');
-            qText = qText.replace(/\d+\s*điểm/gi, '');
-            qText = qText.replace(/^Question\s*\d+[\s\.\:]*/i, '');
+            qText = `Câu hỏi ${qIndex + 1}`;
         }
-
-        qText = qText.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
 
         // Extract options
         const options = [];
