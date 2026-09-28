@@ -2057,14 +2057,16 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Priority fallback chain with official active Gemini models
+            // Priority fallback chain: Prioritize latest models (Gemini 3.8 / 3.7 / 3.6 Flash) for maximum accuracy
             const models = [
+                'gemini-3.8-flash',
+                'gemini-3.7-flash',
+                'gemini-3.6-flash',
+                'gemini-3.5-flash-lite',
+                'gemini-2.5-flash',
                 'gemini-2.0-flash',
-                'gemini-2.0-flash-lite',
                 'gemini-1.5-flash',
-                'gemini-1.5-flash-latest',
-                'gemini-1.5-flash-8b',
-                'gemini-1.5-pro'
+                'gemini-1.5-flash-latest'
             ];
             let lastError = null;
             for (const model of models) {
