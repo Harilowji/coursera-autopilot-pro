@@ -407,7 +407,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "START_SKIPPING", mode: mode }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Kết nối thất bại: Hãy F5 lại trang Coursera và thử lại!");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 } else {
                     log("Đang tải dữ liệu bài học qua API...");
                 }
@@ -429,7 +429,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     log("Lỗi: " + chrome.runtime.lastError.message);
                 } else {
                     log("⏹ Đã dừng.");
-                    setRunningState(false);
+                    setRunningState(false, "Đã dừng", false);
                 }
             });
         });
@@ -453,7 +453,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "AUDIT_COURSE" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang chủ khóa học (/home/welcome hoặc /home/week/1) rồi thử lại.");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 }
             });
         });
@@ -471,7 +471,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "GET_CERT_INFO" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang khóa học trên Coursera rồi thử lại.");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 }
             });
         });
@@ -514,7 +514,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "AUTO_DISCUSSION" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở đúng trang thảo luận rồi thử lại.");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 }
             });
         });
@@ -532,7 +532,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "AUTO_DO_ASSIGNMENT" }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang nộp bài tập (Submit your assignment) rồi thử lại.");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 }
             });
         });
@@ -551,7 +551,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "AUTO_GRADE_PEER", count: count }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang chấm bài (Review your peers) rồi thử lại.");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 }
             });
         });
@@ -577,7 +577,7 @@ document.addEventListener('DOMContentLoaded', function () {
             chrome.tabs.sendMessage(tab.id, { action: "AUTO_DO_QUIZ", provider: provider, apiKey: key }, (response) => {
                 if (chrome.runtime.lastError) {
                     log("❌ Hãy mở trang làm bài thi (Quiz Attempt) rồi thử lại.");
-                    setRunningState(false);
+                    setRunningState(false, "Lỗi", false);
                 } else {
                     log("🤖 [v2.4] Đang phân tích và xử lý câu hỏi...");
                 }
@@ -597,8 +597,8 @@ document.addEventListener('DOMContentLoaded', function () {
             copyQuizBtn.textContent = "⏳ Đang cào đề thi...";
 
             chrome.tabs.sendMessage(tab.id, { action: "COPY_QUIZ_PROMPT" }, async (response) => {
-                setRunningState(false);
                 if (chrome.runtime.lastError) {
+                    setRunningState(false, "Lỗi", false);
                     log("❌ Hãy chắc chắn bạn đang mở trang bài thi (Quiz Attempt)!");
                     copyQuizBtn.textContent = originalText;
                     return;

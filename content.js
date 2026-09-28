@@ -981,11 +981,21 @@ function resolveOptionIndices(rawAnswer, options) {
             }
         }
 
-        // 2. Letter check (A, B, C, D, E, F...)
+        // 2. Letter check (A, B, C, D, E, F... or "Option A", "A.", "(A)", "A. text")
         if (typeof item === 'string') {
-            const trimmed = item.trim().toUpperCase();
-            if (/^[A-H]$/.test(trimmed)) {
-                const letterIndex = trimmed.charCodeAt(0) - 65;
+            const trimmed = item.trim();
+            const singleLetterMatch = trimmed.match(/^(?:option|choice)?\s*\(?([a-hA-H])\)?[\.\:\-\s]*$/i);
+            if (singleLetterMatch) {
+                const letterIndex = singleLetterMatch[1].toUpperCase().charCodeAt(0) - 65;
+                if (options.some(o => o.index === letterIndex)) {
+                    resolved.add(letterIndex);
+                    continue;
+                }
+            }
+
+            const letterWithTextMatch = trimmed.match(/^(?:option|choice)?\s*\(?([a-hA-H])\)?[\.\:\-\s]+\s*(.+)$/i);
+            if (letterWithTextMatch) {
+                const letterIndex = letterWithTextMatch[1].toUpperCase().charCodeAt(0) - 65;
                 if (options.some(o => o.index === letterIndex)) {
                     resolved.add(letterIndex);
                     continue;
@@ -997,8 +1007,8 @@ function resolveOptionIndices(rawAnswer, options) {
         if (typeof item === 'string' && item.trim().length > 0) {
             const itemLower = item.trim().toLowerCase();
             const matched = options.find(o => {
-                const optLower = (o.text || '').toLowerCase();
-                return optLower === itemLower || optLower.includes(itemLower) || itemLower.includes(optLower);
+                const optLower = (o.text || '').toLowerCase().trim();
+                return optLower === itemLower || (itemLower.length > 3 && optLower.includes(itemLower)) || (optLower.length > 3 && itemLower.includes(optLower));
             });
             if (matched) {
                 resolved.add(matched.index);
@@ -1724,12 +1734,16 @@ class SkiperaJS {
             await simulateInput(input, template.body);
         }
 
-        const agreementBox = document.querySelector('input#agreement-checkbox-base') || document.querySelector('input[type="checkbox"]');
-        if (agreementBox && !agreementBox.checked) {
-            agreementBox.click();
-            agreementBox.checked = true;
-            agreementBox.dispatchEvent(new Event('change', { bubbles: true }));
-        }
+        const agreementBoxes = document.querySelectorAll(
+            'input#agreement-checkbox-base, input[data-testid*="honor" i], input[data-testid*="agreement" i], input[type="checkbox"][name*="agreement" i], input[type="checkbox"][name*="honor" i], input[type="checkbox"]'
+        );
+        agreementBoxes.forEach(box => {
+            if (!box.checked) {
+                box.click();
+                box.checked = true;
+                box.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
 
         safeSendMessage({
             action: "PROGRESS_UPDATE",
@@ -2043,14 +2057,14 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Priority fallback chain with latest models
+            // Priority fallback chain with official active Gemini models
             const models = [
-                'gemini-3.8-flash',
-                'gemini-3.6-flash',
-                'gemini-3.5-flash-lite',
-                'gemini-2.5-flash',
+                'gemini-2.0-flash',
+                'gemini-2.0-flash-lite',
                 'gemini-1.5-flash',
-                'gemini-1.5-flash-latest'
+                'gemini-1.5-flash-latest',
+                'gemini-1.5-flash-8b',
+                'gemini-1.5-pro'
             ];
             let lastError = null;
             for (const model of models) {
