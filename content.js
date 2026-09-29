@@ -120,9 +120,10 @@ function formatCourseraNodeToMarkdown(containerEl) {
     const junkSelectors = [
         'input[type="radio"]', 'input[type="checkbox"]',
         'span.rc-FormPart__points', 'span[class*="points"]',
-        'span[class*="Points"]', 'button', 'svg', '.screenreader-only', 'span.sr-only',
+        'span[class*="Points"]', 'svg', '.screenreader-only', 'span.sr-only',
         '.line-numbers-rows', '.line-number', '.linenumber', '.line-numbers', 'span.line-no', '.gutter',
-        'button.copy-code-button', 'button[class*="copy"]', '.cml-code-copy'
+        'button.copy-code-button', 'button[class*="copy" i]', '.cml-code-copy',
+        'button[aria-label*="copy" i]', 'button[aria-label*="close" i]', 'button[aria-label*="dismiss" i]'
     ];
     junkSelectors.forEach(sel => {
         clone.querySelectorAll(sel).forEach(el => el.remove());
@@ -386,9 +387,17 @@ function findCourseraStartButton(rootDoc = null) {
     return null;
 }
 
-// Rapid scroll helper to force lazy-loaded questions and components to mount into the DOM
+// Helper to force lazy-loaded questions to mount into the DOM without disruptive scrolling
 async function prepareQuizPageForScraping() {
     try {
+        // If questions or inputs are already present in the DOM, bypass scrolling to prevent UI jerkiness or React unmounting
+        const existingInputs = document.querySelectorAll(
+            'input[type="radio"], [role="radio"], input[type="checkbox"], [role="checkbox"], .rc-FormPartsQuestion, div[data-testid^="part-Submission_Form_"], fieldset'
+        );
+        if (existingInputs.length >= 3) {
+            return;
+        }
+
         const scrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
         if (scrollHeight > window.innerHeight * 1.3) {
             const step = Math.max(window.innerHeight, Math.floor(scrollHeight / 6));
@@ -406,8 +415,390 @@ async function prepareQuizPageForScraping() {
     }
 }
 
-function extractQuizQuestionsFromDoc(doc) {
+// Helper to check if an element is currently rendered and visible (not part of an unmounted or hidden tab/quiz)
+function isElementVisible(el) {
+    if (!el) return false;
+    try {
+        if (el.closest('[aria-hidden="true"], [hidden], .hidden, div[style*="display: none"]')) {
+            return false;
+        }
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') {
+            return false;
+        }
+        return true;
+    } catch (_) {
+        return true;
+    }
+}
+
+// Helper to clean points badges, question numbers, and noise from question prompts
+function cleanPromptText(raw) {
+    if (!raw) return "";
+    let text = raw;
+    text = text.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '');
+    text = text.replace(/\d+(?:\.\d+)?\s*points?/gi, '');
+    text = text.replace(/\d+\s*điểm/gi, '');
+    text = text.replace(/^(?:Question|Câu hỏi|Bài tập)\s*\d+[\s\.\:\-]*/i, '');
+    return text.trim();
+}
+
+// Bulletproof prompt extractor: isolates question text, code blocks, and math formulas with 100% fidelity
+function getQuestionPromptText(container, doc, questionIndex) {
+    if (!container) return `Câu hỏi ${questionIndex + 1}`;
+
+    // 1. Check for dedicated prompt selectors INSIDE the container
+    const internalPromptSelectors = [
+        '.rc-FormPart__question-text',
+        'div[data-testid*="question-prompt" i]',
+        'div[data-testid*="prompt" i]',
+        'div[data-testid*="question-text" i]',
+        'div[class*="QuestionPrompt" i]',
+        'div[class*="question-prompt" i]',
+        'div[class*="QuestionText" i]',
+        '.rc-QuestionText',
+        'div.rc-QuestionBody',
+        '[data-e2e="question-text"]',
+        'legend'
+    ];
+
+    for (const sel of internalPromptSelectors) {
+        const promptEl = container.querySelector(sel);
+        if (promptEl) {
+            const md = formatCourseraNodeToMarkdown(promptEl);
+            const cleaned = cleanPromptText(md);
+            if (cleaned.length > 5) return cleaned;
+        }
+    }
+
+    // 2. Check for .rc-CML or [data-testid="cml-viewer"] inside container that is NOT inside options
+    const cmlCandidates = Array.from(container.querySelectorAll('.rc-CML, [data-testid="cml-viewer"], .cml-viewer'));
+    for (const cml of cmlCandidates) {
+        if (!cml.closest('.rc-FormPart__options, .rc-Options, [role="radiogroup"], fieldset, .rc-Option, [role="radio"], [role="checkbox"], [role="option"], label')) {
+            const md = formatCourseraNodeToMarkdown(cml);
+            const cleaned = cleanPromptText(md);
+            if (cleaned.length > 5) return cleaned;
+        }
+    }
+
+    // 3. For fieldset or radiogroup containers, check aria-labelledby / aria-describedby references
+    const labelledBy = container.getAttribute('aria-labelledby') || container.getAttribute('aria-describedby');
+    if (labelledBy) {
+        for (const id of labelledBy.split(/\s+/)) {
+            if (!id) continue;
+            const labelEl = doc.getElementById(id);
+            if (labelEl) {
+                const md = formatCourseraNodeToMarkdown(labelEl);
+                const cleaned = cleanPromptText(md);
+                if (cleaned.length > 5) return cleaned;
+            }
+        }
+    }
+
+    // 4. Check previous siblings (Coursera CDS often places prompt as preceding sibling of fieldset)
+    let prev = container.previousElementSibling;
+    let stepCount = 0;
+    while (prev && stepCount < 4) {
+        const promptEl = prev.matches?.('.rc-FormPart__question-text, .rc-CML, [data-testid="cml-viewer"], div[class*="Prompt" i], div[data-testid*="prompt" i], legend')
+            ? prev
+            : prev.querySelector?.('.rc-FormPart__question-text, .rc-CML, [data-testid="cml-viewer"], div[class*="Prompt" i], div[data-testid*="prompt" i], legend');
+        if (promptEl) {
+            const md = formatCourseraNodeToMarkdown(promptEl);
+            const cleaned = cleanPromptText(md);
+            if (cleaned.length > 5) return cleaned;
+        }
+        if (!prev.querySelector?.('input, [role="radio"], [role="checkbox"], [role="radiogroup"]')) {
+            const md = formatCourseraNodeToMarkdown(prev);
+            const cleaned = cleanPromptText(md);
+            if (cleaned.length > 10) return cleaned;
+        }
+        prev = prev.previousElementSibling;
+        stepCount++;
+    }
+
+    // 5. Check parent's previous sibling (e.g. if container is wrapped in a fieldset or div)
+    if (container.parentElement) {
+        let parentPrev = container.parentElement.previousElementSibling;
+        if (parentPrev) {
+            const promptEl = parentPrev.querySelector?.('.rc-FormPart__question-text, .rc-CML, [data-testid="cml-viewer"], div[class*="Prompt" i], div[data-testid*="prompt" i]');
+            if (promptEl) {
+                const md = formatCourseraNodeToMarkdown(promptEl);
+                const cleaned = cleanPromptText(md);
+                if (cleaned.length > 5) return cleaned;
+            }
+        }
+    }
+
+    // 6. Fallback: Clone container and remove only true option wrappers
+    const clone = container.cloneNode(true);
+    const optSelectors = [
+        '.rc-FormPart__options', '.rc-Options', '.rc-FormPartsQuestion__options',
+        'div[class*="options-container" i]', 'div[class*="OptionsContainer" i]',
+        'div[data-testid*="options" i]', 'div[data-testid*="Options" i]',
+        'div[class*="choices" i]', 'div[class*="Choices" i]', 'div[data-testid*="choices" i]',
+        '[role="radiogroup"]', '.cds-radio-group',
+        'span.rc-FormPart__points', 'span[class*="points" i]', 'div[class*="points" i]'
+    ];
+    optSelectors.forEach(s => clone.querySelectorAll(s).forEach(e => e.remove()));
+    clone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(inp => {
+        const lbl = inp.closest('label');
+        if (lbl) lbl.remove();
+        else inp.remove();
+    });
+    clone.querySelectorAll('input, textarea').forEach(inp => {
+        const span = doc.createElement('span');
+        span.textContent = ' [____] ';
+        inp.replaceWith(span);
+    });
+
+    const parsed = cleanPromptText(formatCourseraNodeToMarkdown(clone));
+    if (parsed.length > 5) return parsed;
+
+    return `Câu hỏi ${questionIndex + 1}`;
+}
+
+// Helper to extract option label text cleanly without stripping option content
+function extractOptionInfo(inp, index) {
+    const parentLabel = inp.closest('label');
+    const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], [role="option"], div[class*="Option" i], button[class*="Option" i], .cds-radio-item, .cds-checkbox-item') || parentLabel || inp.parentElement;
+
+    const textSelectors = [
+        '.rc-Option__text',
+        '.cds-radio-labelText',
+        '.cds-checkbox-labelText',
+        'span[class*="labelText" i]',
+        'div[class*="option-text" i]',
+        'div[class*="OptionText" i]',
+        '.rc-FormPartsQuestion__option-text',
+        '[data-testid="cml-viewer"]',
+        '.cml-viewer',
+        '.rc-CML'
+    ];
+
+    let optContentEl = null;
+    if (parentOpt || parentLabel) {
+        for (const sel of textSelectors) {
+            const found = (parentOpt || parentLabel).querySelector(sel);
+            if (found && (found.innerText || found.textContent || "").trim().length > 0) {
+                optContentEl = found;
+                break;
+            }
+        }
+    }
+
+    let optText = "";
+    if (optContentEl) {
+        optText = formatCourseraNodeToMarkdown(optContentEl);
+    } else {
+        const target = parentLabel || parentOpt || inp.parentElement;
+        if (target) {
+            const clone = target.cloneNode(true);
+            clone.querySelectorAll('input, [role="radio"], [role="checkbox"], svg').forEach(e => e.remove());
+            optText = formatCourseraNodeToMarkdown(clone);
+        }
+    }
+
+    if (!optText) {
+        optText = inp.value || inp.innerText || inp.textContent || `Lựa chọn ${index + 1}`;
+    }
+
+    optText = optText.replace(/^(?:[a-zA-Z][\.\)\:]|\d+[\)\:]|\d+\.)\s+/i, '').trim();
+
+    return {
+        index: index,
+        text: optText || `Lựa chọn ${index + 1}`,
+        element: inp,
+        clickTarget: parentOpt || parentLabel || inp
+    };
+}
+
+// Strategy 1: Parse structured question container blocks
+function parseStructuredBlocks(questionBlocks, doc) {
     const questions = [];
+
+    questionBlocks.forEach((qEl, qIndex) => {
+        if (!isElementVisible(qEl)) return;
+
+        let radioInputs = Array.from(qEl.querySelectorAll('input[type="radio"], [role="radio"]'));
+        let checkInputs = Array.from(qEl.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
+
+        // Exclude honor code & agreement checkboxes
+        checkInputs = checkInputs.filter(inp => {
+            if (inp.type === 'hidden') return false;
+            const id = (inp.id || '').toLowerCase();
+            const name = (inp.name || '').toLowerCase();
+            const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
+            return !(id.includes('agreement') || id.includes('honor') || name.includes('agreement') || name.includes('honor') || aria.includes('honor code') || aria.includes('agreement'));
+        });
+        radioInputs = radioInputs.filter(inp => inp.type !== 'hidden');
+
+        const selectInputs = Array.from(qEl.querySelectorAll('select'));
+        const textInputs = Array.from(qEl.querySelectorAll('textarea, input:not([type]), input[type="text"], input[type="number"], div[role="textbox"]')).filter(inp => {
+            return inp.type !== 'hidden' && inp.type !== 'submit' && inp.type !== 'button' && inp.type !== 'radio' && inp.type !== 'checkbox';
+        });
+
+        // Custom options in practice quizzes & ungraded widgets
+        if (radioInputs.length === 0 && checkInputs.length === 0 && selectInputs.length === 0 && textInputs.length === 0) {
+            const customOptions = Array.from(qEl.querySelectorAll(
+                '[role="option"], button[aria-checked], div[aria-checked], .rc-Option, div[class*="Option" i], button[class*="Option" i], div[data-testid*="option-item" i]'
+            )).filter(el => !el.querySelector('[role="option"], button[aria-checked], .rc-Option'));
+
+            if (customOptions.length > 0) {
+                const isMulti = customOptions.some(el => el.getAttribute('role') === 'checkbox' || el.getAttribute('aria-multiselectable') === 'true');
+                if (isMulti) {
+                    checkInputs = customOptions;
+                } else {
+                    radioInputs = customOptions;
+                }
+            }
+        }
+
+        let qType = "single";
+        let inputElements = radioInputs;
+        if (checkInputs.length > 0) {
+            qType = "multiple";
+            inputElements = checkInputs;
+        } else if (selectInputs.length > 0) {
+            qType = "dropdown";
+            inputElements = selectInputs;
+        } else if (textInputs.length > 0 && radioInputs.length === 0) {
+            qType = "text";
+            inputElements = textInputs;
+        }
+
+        if (inputElements.length === 0 && selectInputs.length === 0) return;
+
+        // Extract prompt using dedicated prompt extractor
+        const qText = getQuestionPromptText(qEl, doc, questions.length);
+
+        // Extract options
+        const options = [];
+        if (qType === "dropdown") {
+            const selEl = selectInputs[0];
+            Array.from(selEl.options).forEach((opt, oIndex) => {
+                if (opt.value && opt.text.trim()) {
+                    options.push({
+                        index: oIndex,
+                        text: opt.text.trim(),
+                        value: opt.value,
+                        element: selEl,
+                        clickTarget: selEl
+                    });
+                }
+            });
+        } else if (qType !== "text") {
+            inputElements.forEach((inp, oIndex) => {
+                options.push(extractOptionInfo(inp, oIndex));
+            });
+        }
+
+        const currentId = questions.length;
+        questions.push({
+            id: currentId,
+            displayNumber: currentId + 1,
+            text: qText,
+            type: qType,
+            options: options,
+            textElement: qType === "text" ? textInputs[0] : null,
+            textElements: qType === "text" ? textInputs : []
+        });
+    });
+
+    return questions;
+}
+
+// Strategy 2: Group inputs across the document (for CDS, flat layouts, and practice quizzes)
+function parseByInputGrouping(doc) {
+    const questions = [];
+
+    let allInputs = Array.from(doc.querySelectorAll(
+        'input[type="radio"], input[type="checkbox"], select, textarea, input:not([type]), input[type="text"], input[type="number"], [role="radio"], [role="checkbox"], [role="option"], button[aria-checked]'
+    ));
+
+    // Exclude hidden, submit, button, and Coursera Honor Code / agreement checkboxes
+    allInputs = allInputs.filter(inp => {
+        if (!inp) return false;
+        if (inp.type === 'hidden' || inp.type === 'submit' || (inp.type === 'button' && !inp.getAttribute('role') && !inp.hasAttribute('aria-checked'))) return false;
+        const id = (inp.id || '').toLowerCase();
+        const name = (inp.name || '').toLowerCase();
+        const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
+        if (id.includes('agreement') || id.includes('honor') || name.includes('agreement') || name.includes('honor') || aria.includes('honor code') || aria.includes('agreement')) {
+            return false;
+        }
+        return isElementVisible(inp);
+    });
+
+    // Remove nested duplicates
+    allInputs = allInputs.filter(inp => !allInputs.some(other => other !== inp && inp.contains(other)));
+
+    if (allInputs.length === 0) return [];
+
+    // Group inputs by radio name or nearest radiogroup/fieldset
+    const groups = new Map();
+    allInputs.forEach((inp, idx) => {
+        let groupKey;
+        const radioGroup = inp.closest('[role="radiogroup"], [role="group"], fieldset, div[data-testid*="question" i], div[class*="Question" i]');
+        if (inp.type === 'radio' && inp.name) {
+            groupKey = `radio_${inp.name}`;
+        } else if (radioGroup) {
+            groupKey = radioGroup;
+        } else {
+            const container = inp.closest('fieldset, li, tr, div[class*="Part"], div[data-testid]') || inp.parentElement?.parentElement || inp.parentElement;
+            groupKey = container || `input_${idx}`;
+        }
+
+        if (!groups.has(groupKey)) {
+            groups.set(groupKey, []);
+        }
+        groups.get(groupKey).push(inp);
+    });
+
+    let qIdx = 0;
+    for (const [key, inputs] of groups.entries()) {
+        const firstInp = inputs[0];
+        const container = (typeof key !== 'string')
+            ? key
+            : (firstInp.closest('div[role="group"], [role="radiogroup"], div[data-testid], fieldset, div[class*="Question"]') || firstInp.parentElement?.parentElement || firstInp.parentElement);
+
+        let qType = "single";
+        if (firstInp.type === 'checkbox' || firstInp.getAttribute('role') === 'checkbox') qType = "multiple";
+        else if (firstInp.tagName === 'SELECT') qType = "dropdown";
+        else if (firstInp.tagName === 'TEXTAREA' || (!firstInp.type || firstInp.type === 'text' || firstInp.type === 'number')) qType = "text";
+
+        // Extract prompt
+        const qText = getQuestionPromptText(container, doc, qIdx);
+
+        // Extract options
+        const options = [];
+        if (qType === "dropdown") {
+            Array.from(firstInp.options).forEach((opt, oIndex) => {
+                if (opt.value && opt.text.trim()) {
+                    options.push({ index: oIndex, text: opt.text.trim(), value: opt.value, element: firstInp, clickTarget: firstInp });
+                }
+            });
+        } else if (qType !== "text") {
+            inputs.forEach((inp, oIndex) => {
+                options.push(extractOptionInfo(inp, oIndex));
+            });
+        }
+
+        questions.push({
+            id: qIdx,
+            displayNumber: qIdx + 1,
+            text: qText,
+            type: qType,
+            options: options,
+            textElement: qType === "text" ? firstInp : null,
+            textElements: qType === "text" ? inputs : []
+        });
+        qIdx++;
+    }
+
+    return questions;
+}
+
+function extractQuizQuestionsFromDoc(doc) {
+    if (!doc) return [];
 
     const questionSelectors = [
         // Standard Graded Quizzes & Exams
@@ -442,7 +833,6 @@ function extractQuizQuestionsFromDoc(doc) {
         'div[class*="InVideoQuiz"]'
     ];
 
-    // Strategy 1: Find dedicated question block containers
     let questionBlocks = Array.from(doc.querySelectorAll(questionSelectors.join(', ')));
 
     // Filter out parent containers that contain nested question containers
@@ -450,341 +840,17 @@ function extractQuizQuestionsFromDoc(doc) {
         return !questionBlocks.some(other => other !== block && block.contains(other));
     });
 
-    // Strategy 2: If no structured blocks or only 1 big block containing all inputs (e.g. form wrapper)
-    if (questionBlocks.length <= 1) {
-        let allInputs = Array.from(doc.querySelectorAll(
-            'input[type="radio"], input[type="checkbox"], select, textarea, input[type="text"], input[type="number"], [role="radio"], [role="checkbox"], [role="option"], button[aria-checked]'
-        ));
+    let questions = [];
 
-        // Filter out nested duplicates
-        allInputs = allInputs.filter(inp => {
-            return !allInputs.some(other => other !== inp && inp.contains(other));
-        });
-
-        // Group by input.name (for native radios) or by nearest question/radiogroup container
-        const groups = new Map();
-        allInputs.forEach((inp, idx) => {
-            if (inp.id && inp.id.includes('agreement')) return;
-            if (inp.name && inp.name.includes('honor')) return;
-            if (inp.type === 'hidden') return;
-
-            let groupKey;
-            const radioGroup = inp.closest('[role="radiogroup"], [role="group"], div[class*="Question" i], div[class*="question" i], div[data-testid*="question" i], fieldset');
-            if (inp.type === 'radio' && inp.name) {
-                groupKey = `radio_${inp.name}`;
-            } else if (radioGroup) {
-                groupKey = radioGroup;
-            } else {
-                const container = inp.closest('fieldset, li, tr, div[class*="Part"], div[data-testid]') || inp.parentElement?.parentElement || inp.parentElement;
-                groupKey = container || `input_${idx}`;
-            }
-
-            if (!groups.has(groupKey)) {
-                groups.set(groupKey, []);
-            }
-            groups.get(groupKey).push(inp);
-        });
-
-        // Convert groups into synthesized question objects
-        let qIdx = 0;
-        for (const [key, inputs] of groups.entries()) {
-            const firstInp = inputs[0];
-            const container = firstInp.closest('div[role="group"], div[data-testid], fieldset, div[class*="Question"]') || firstInp.parentElement?.parentElement || firstInp.parentElement;
-
-            let qType = "single";
-            if (firstInp.type === 'checkbox' || firstInp.getAttribute('role') === 'checkbox') qType = "multiple";
-            else if (firstInp.tagName === 'SELECT') qType = "dropdown";
-            else if (firstInp.tagName === 'TEXTAREA' || firstInp.type === 'text' || firstInp.type === 'number') qType = "text";
-
-            // Extract question text
-            let qText = "";
-            if (container) {
-                const cClone = container.cloneNode(true);
-                const optionsSelectorsToRemove = [
-                    '.rc-FormPart__options',
-                    '.rc-Options',
-                    '.rc-FormPartsQuestion__options',
-                    'div[class*="options-container" i]',
-                    'div[class*="OptionsContainer" i]',
-                    'div[data-testid*="options" i]',
-                    'div[data-testid*="Options" i]',
-                    'div[class*="choices" i]',
-                    'div[class*="Choices" i]',
-                    'div[data-testid*="choices" i]',
-                    '[role="radiogroup"]',
-                    '.rc-Option',
-                    'div[class*="Option" i]',
-                    'button[class*="Option" i]',
-                    '[role="option"]',
-                    '[role="radio"]',
-                    '[role="checkbox"]',
-                    'span.rc-FormPart__points',
-                    'span[class*="points" i]',
-                    'span[class*="Points" i]',
-                    'div[class*="points" i]',
-                    'button',
-                    'svg',
-                    '.screenreader-only',
-                    '.sr-only'
-                ];
-                optionsSelectorsToRemove.forEach(sel => {
-                    cClone.querySelectorAll(sel).forEach(el => el.remove());
-                });
-                cClone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(inp => {
-                    const lbl = inp.closest('label');
-                    if (lbl) lbl.remove();
-                });
-                cClone.querySelectorAll('input[type="text"], input[type="number"], textarea').forEach(inp => {
-                    const span = document.createElement('span');
-                    span.textContent = ' [____] ';
-                    inp.replaceWith(span);
-                });
-
-                let parsed = formatCourseraNodeToMarkdown(cClone);
-                parsed = parsed.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '').replace(/\d+\s*điểm/gi, '').trim();
-                parsed = parsed.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
-                if (parsed.length > 5) {
-                    qText = parsed;
-                } else {
-                    const textEl = container.querySelector('.rc-CML, [data-testid="cml-viewer"], legend, .rc-FormPart__question-text, .rc-QuestionText, h3, h4');
-                    if (textEl) qText = formatCourseraNodeToMarkdown(textEl);
-                    else {
-                        const ancestor = container.parentElement;
-                        const ancestorTextEl = ancestor ? ancestor.querySelector('.rc-CML, legend, h3, h4, [data-testid*="question"]') : null;
-                        if (ancestorTextEl) qText = formatCourseraNodeToMarkdown(ancestorTextEl);
-                    }
-                }
-            }
-            if (!qText) qText = `Câu hỏi ${qIdx + 1}`;
-            qText = qText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '').replace(/\d+\s*điểm/gi, '').trim();
-
-            const options = [];
-            if (qType === "dropdown") {
-                Array.from(firstInp.options).forEach((opt, oIndex) => {
-                    if (opt.value && opt.text.trim()) {
-                        options.push({ index: oIndex, text: opt.text.trim(), value: opt.value, element: firstInp, clickTarget: firstInp });
-                    }
-                });
-            } else if (qType !== "text") {
-                inputs.forEach((inp, oIndex) => {
-                    const parentLabel = inp.closest('label');
-                    const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], [role="option"], div[class*="Option" i], button[class*="Option" i]') || parentLabel || inp.parentElement;
-                    const optContentEl = (parentOpt || parentLabel)?.querySelector?.('.rc-Option__text, [data-testid="cml-viewer"], .cml-viewer, .rc-FormPartsQuestion__option-text') || parentOpt || parentLabel;
-                    let optText = formatCourseraNodeToMarkdown(optContentEl);
-                    if (!optText) optText = inp.value || inp.innerText || inp.textContent || `Lựa chọn ${oIndex + 1}`;
-                    optText = optText.replace(/^(?:[a-zA-Z][\.\)\:]|\d+[\)\:]|\d+\.)\s+/i, '').trim();
-                    options.push({
-                        index: oIndex,
-                        text: optText || `Lựa chọn ${oIndex + 1}`,
-                        element: inp,
-                        clickTarget: parentOpt || inp
-                    });
-                });
-            }
-
-            questions.push({
-                id: qIdx,
-                displayNumber: qIdx + 1,
-                text: qText,
-                type: qType,
-                options: options,
-                textElement: qType === "text" ? firstInp : null,
-                textElements: qType === "text" ? inputs : []
-            });
-            qIdx++;
-        }
-
-        if (questions.length > 0) return questions;
+    // Strategy 1: Structured blocks
+    if (questionBlocks.length > 0) {
+        questions = parseStructuredBlocks(questionBlocks, doc);
     }
 
-    // Process structured questionBlocks
-    questionBlocks.forEach((qEl, qIndex) => {
-        let radioInputs = Array.from(qEl.querySelectorAll('input[type="radio"]'));
-        if (radioInputs.length === 0) {
-            radioInputs = Array.from(qEl.querySelectorAll('[role="radio"]'));
-        }
-        let checkInputs = Array.from(qEl.querySelectorAll('input[type="checkbox"]'));
-        if (checkInputs.length === 0) {
-            checkInputs = Array.from(qEl.querySelectorAll('[role="checkbox"]'));
-        }
-
-        // Exclude hidden inputs and Coursera Honor Code / agreement checkboxes
-        checkInputs = checkInputs.filter(inp => {
-            if (inp.type === 'hidden') return false;
-            const id = (inp.id || '').toLowerCase();
-            const name = (inp.name || '').toLowerCase();
-            const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
-            return !(id.includes('agreement') || id.includes('honor') || name.includes('agreement') || name.includes('honor') || aria.includes('honor code') || aria.includes('agreement'));
-        });
-        radioInputs = radioInputs.filter(inp => inp.type !== 'hidden');
-
-        const selectInputs = Array.from(qEl.querySelectorAll('select'));
-        const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"], input[type="number"]'));
-
-        // Custom options in practice quizzes & ungraded widgets
-        if (radioInputs.length === 0 && checkInputs.length === 0 && selectInputs.length === 0 && textInputs.length === 0) {
-            const customOptions = Array.from(qEl.querySelectorAll(
-                '[role="option"], button[aria-checked], div[aria-checked], .rc-Option, div[class*="Option" i], button[class*="Option" i], div[data-testid*="option-item" i]'
-            )).filter(el => !el.querySelector('[role="option"], button[aria-checked], .rc-Option'));
-
-            if (customOptions.length > 0) {
-                const isMulti = customOptions.some(el => el.getAttribute('role') === 'checkbox' || el.getAttribute('aria-multiselectable') === 'true');
-                if (isMulti) {
-                    checkInputs = customOptions;
-                } else {
-                    radioInputs = customOptions;
-                }
-            }
-        }
-
-        let qType = "single";
-        let inputElements = radioInputs;
-        if (checkInputs.length > 0) {
-            qType = "multiple";
-            inputElements = checkInputs;
-        } else if (selectInputs.length > 0) {
-            qType = "dropdown";
-            inputElements = selectInputs;
-        } else if (textInputs.length > 0 && radioInputs.length === 0) {
-            qType = "text";
-            inputElements = textInputs;
-        }
-
-        if (inputElements.length === 0 && selectInputs.length === 0) return;
-
-        // Extract full question text preserving ALL code blocks, paragraphs, and formulas
-        let qText = "";
-
-        // 1. Clone question container so we can strip options cleanly without touching live DOM
-        const qClone = qEl.cloneNode(true);
-
-        // 2. Remove all options and input containers from clone
-        const optionsSelectorsToRemove = [
-            '.rc-FormPart__options',
-            '.rc-Options',
-            '.rc-FormPartsQuestion__options',
-            'div[class*="options-container" i]',
-            'div[class*="OptionsContainer" i]',
-            'div[data-testid*="options" i]',
-            'div[data-testid*="Options" i]',
-            'div[class*="choices" i]',
-            'div[class*="Choices" i]',
-            'div[data-testid*="choices" i]',
-            '[role="radiogroup"]',
-            '.rc-Option',
-            'div[class*="Option" i]',
-            'button[class*="Option" i]',
-            '[role="option"]',
-            '[role="radio"]',
-            '[role="checkbox"]',
-            'select',
-            'span.rc-FormPart__points',
-            'span[class*="points" i]',
-            'span[class*="Points" i]',
-            'div[class*="points" i]',
-            'button',
-            'svg',
-            '.screenreader-only',
-            '.sr-only'
-        ];
-        optionsSelectorsToRemove.forEach(sel => {
-            qClone.querySelectorAll(sel).forEach(el => el.remove());
-        });
-
-        qClone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(inp => {
-            const lbl = inp.closest('label');
-            if (lbl) lbl.remove();
-        });
-
-        // 3. Convert any fill-in-the-blank input into a visible blank token [____]
-        qClone.querySelectorAll('input[type="text"], input[type="number"], textarea').forEach(inp => {
-            const span = document.createElement('span');
-            span.textContent = ' [____] ';
-            inp.replaceWith(span);
-        });
-
-        // 4. Format everything that remains (text, code blocks, math, tables)
-        let fullText = formatCourseraNodeToMarkdown(qClone);
-        fullText = fullText.replace(/\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\s*points?/gi, '');
-        fullText = fullText.replace(/\d+(?:\.\d+)?\s*points?/gi, '');
-        fullText = fullText.replace(/\d+\s*điểm/gi, '');
-        fullText = fullText.replace(/^Question\s*\d+[\s\.\:]*/i, '').trim();
-
-        if (fullText.length > 5) {
-            qText = fullText;
-        }
-
-        // Fallback: If stripping options removed too much, try targeted question selectors
-        if (!qText) {
-            const fallbackSelectors = [
-                ".rc-FormPart__question-text",
-                "div.rc-QuestionBody",
-                "[data-e2e='question-text']",
-                "[data-testid*='question-text' i]",
-                ".rc-QuestionText",
-                "div[class*='QuestionPrompt' i]",
-                "div[class*='question-prompt' i]",
-                "div[class*='QuestionText' i]",
-                "div.rc-CML",
-                "[data-testid='cml-viewer']",
-                "h3", "h4",
-                "legend"
-            ];
-            for (const sel of fallbackSelectors) {
-                const el = qEl.querySelector(sel);
-                if (el && (el.innerText || el.textContent || "").trim().length > 3) {
-                    qText = formatCourseraNodeToMarkdown(el);
-                    break;
-                }
-            }
-        }
-
-        if (!qText) {
-            qText = `Câu hỏi ${qIndex + 1}`;
-        }
-
-        // Extract options
-        const options = [];
-        if (qType === "dropdown") {
-            const selEl = selectInputs[0];
-            Array.from(selEl.options).forEach((opt, oIndex) => {
-                if (opt.value && opt.text.trim()) {
-                    options.push({
-                        index: oIndex,
-                        text: opt.text.trim(),
-                        value: opt.value,
-                        element: selEl,
-                        clickTarget: selEl
-                    });
-                }
-            });
-        } else if (qType !== "text") {
-            inputElements.forEach((inp, oIndex) => {
-                const parentLabel = inp.closest('label');
-                const parentOpt = inp.closest('.rc-Option, [role="radio"], [role="checkbox"], [role="option"], div[class*="Option" i], button[class*="Option" i]') || parentLabel || inp.parentElement;
-                const optContentEl = (parentOpt || parentLabel)?.querySelector?.('.rc-Option__text, [data-testid="cml-viewer"], .cml-viewer, .rc-FormPartsQuestion__option-text') || parentOpt || parentLabel;
-                let optText = formatCourseraNodeToMarkdown(optContentEl);
-                if (!optText) optText = inp.value || inp.innerText || inp.textContent || `Lựa chọn ${oIndex + 1}`;
-                optText = optText.replace(/^(?:[a-zA-Z][\.\)\:]|\d+[\)\:]|\d+\.)\s+/i, '').trim();
-                options.push({
-                    index: oIndex,
-                    text: optText || `Lựa chọn ${oIndex + 1}`,
-                    element: inp,
-                    clickTarget: parentOpt || inp
-                });
-            });
-        }
-
-        questions.push({
-            id: qIndex,
-            displayNumber: qIndex + 1,
-            text: qText,
-            type: qType,
-            options: options,
-            textElement: qType === "text" ? textInputs[0] : null,
-            textElements: qType === "text" ? textInputs : []
-        });
-    });
+    // Strategy 2: If Strategy 1 produced NO questions (e.g. flat CDS layout or practice quiz widgets), automatically fall back to Input Grouping
+    if (questions.length === 0) {
+        questions = parseByInputGrouping(doc);
+    }
 
     return questions;
 }
