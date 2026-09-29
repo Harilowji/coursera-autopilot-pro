@@ -216,13 +216,18 @@ function formatCourseraNodeToMarkdown(containerEl) {
         }
     });
 
-    // 5. Format Images / Diagrams
+    // 5. Format Images / Diagrams (Strip huge base64 data URIs to avoid API payload explosion)
     clone.querySelectorAll('img').forEach(imgEl => {
         const src = imgEl.getAttribute('src') || '';
         const alt = imgEl.getAttribute('alt') || imgEl.getAttribute('title') || 'Diagram / Image';
         if (src) {
             const div = document.createElement('div');
-            div.textContent = `\n[📸 SƠ ĐỒ / HÌNH ẢNH: "${alt}" - URL: ${src}]\n`;
+            if (src.startsWith('data:')) {
+                div.textContent = `\n[📸 SƠ ĐỒ / HÌNH ẢNH: "${alt}" (Hình ảnh nhúng trực tiếp trong đề)]\n`;
+            } else {
+                const cleanSrc = src.length > 300 ? src.substring(0, 300) + '...' : src;
+                div.textContent = `\n[📸 SƠ ĐỒ / HÌNH ẢNH: "${alt}" - URL: ${cleanSrc}]\n`;
+            }
             imgEl.replaceWith(div);
         }
     });
@@ -381,6 +386,26 @@ function findCourseraStartButton(rootDoc = null) {
     return null;
 }
 
+// Rapid scroll helper to force lazy-loaded questions and components to mount into the DOM
+async function prepareQuizPageForScraping() {
+    try {
+        const scrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+        if (scrollHeight > window.innerHeight * 1.3) {
+            const step = Math.max(window.innerHeight, Math.floor(scrollHeight / 6));
+            for (let y = step; y < scrollHeight; y += step) {
+                window.scrollTo(0, y);
+                await new Promise(r => setTimeout(r, 40));
+            }
+            window.scrollTo(0, scrollHeight);
+            await new Promise(r => setTimeout(r, 80));
+            window.scrollTo(0, 0);
+            await new Promise(r => setTimeout(r, 60));
+        }
+    } catch (e) {
+        console.warn("[AutopilotPro] prepareQuizPageForScraping error:", e);
+    }
+}
+
 function extractQuizQuestionsFromDoc(doc) {
     const questions = [];
 
@@ -406,11 +431,6 @@ function extractQuizQuestionsFromDoc(doc) {
         'div[data-testid*="single-question" i]',
         'div[data-testid*="question-block" i]',
         'div[data-testid*="QuestionBlock" i]',
-        'div[data-testid*="QuestionGroup" i]',
-        'div[data-e2e*="question" i]',
-        'div[class*="ItemQuestion"]',
-        '.rc-ItemQuestions',
-        '.rc-ItemQuestionsWrapper',
 
         // ARIA Question Regions
         'div[role="region"][aria-label*="Question" i]',
@@ -419,11 +439,7 @@ function extractQuizQuestionsFromDoc(doc) {
 
         // In-Video & Interactive Lab Quizzes
         '.rc-InVideoQuiz',
-        'div[class*="InVideoQuiz"]',
-
-        // Fieldsets
-        'fieldset[class*="Question"]',
-        'fieldset'
+        'div[class*="InVideoQuiz"]'
     ];
 
     // Strategy 1: Find dedicated question block containers
@@ -591,6 +607,17 @@ function extractQuizQuestionsFromDoc(doc) {
         if (checkInputs.length === 0) {
             checkInputs = Array.from(qEl.querySelectorAll('[role="checkbox"]'));
         }
+
+        // Exclude hidden inputs and Coursera Honor Code / agreement checkboxes
+        checkInputs = checkInputs.filter(inp => {
+            if (inp.type === 'hidden') return false;
+            const id = (inp.id || '').toLowerCase();
+            const name = (inp.name || '').toLowerCase();
+            const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
+            return !(id.includes('agreement') || id.includes('honor') || name.includes('agreement') || name.includes('honor') || aria.includes('honor code') || aria.includes('agreement'));
+        });
+        radioInputs = radioInputs.filter(inp => inp.type !== 'hidden');
+
         const selectInputs = Array.from(qEl.querySelectorAll('select'));
         const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"], input[type="number"]'));
 
@@ -690,7 +717,6 @@ function extractQuizQuestionsFromDoc(doc) {
         // Fallback: If stripping options removed too much, try targeted question selectors
         if (!qText) {
             const fallbackSelectors = [
-                "legend",
                 ".rc-FormPart__question-text",
                 "div.rc-QuestionBody",
                 "[data-e2e='question-text']",
@@ -701,7 +727,8 @@ function extractQuizQuestionsFromDoc(doc) {
                 "div[class*='QuestionText' i]",
                 "div.rc-CML",
                 "[data-testid='cml-viewer']",
-                "h3", "h4"
+                "h3", "h4",
+                "legend"
             ];
             for (const sel of fallbackSelectors) {
                 const el = qEl.querySelector(sel);
@@ -773,23 +800,33 @@ function extractQuizQuestions(rootDoc = null) {
     return [];
 }
 
-function generateQuizPrompt(questions) {
-    let prompt = "You are an expert academic assistant solving a Coursera quiz with 100% accuracy.\n";
+function generateQuizPrompt(questions, batchIndex = 0, totalBatches = 1) {
+    if (!questions || questions.length === 0) return "";
+    const firstQ = questions[0].displayNumber;
+    const lastQ = questions[questions.length - 1].displayNumber;
+    const expectedKeys = questions.map(q => `"${q.displayNumber}"`).join(', ');
+
+    let prompt = "You are an expert academic assistant solving Coursera quizzes with 100% accuracy.\n";
     prompt += "Analyze each question, code snippet, math formula, and choices carefully.\n";
     prompt += "Return ONLY a single, valid JSON object in this exact format (no markdown fences, no extra commentary):\n";
     prompt += "{\n  \"answers\": {\n";
-    prompt += "    \"1\": [0],\n";
-    prompt += "    \"2\": [1, 2],\n";
-    prompt += "    \"3\": \"my text answer\"\n";
-    prompt += "  }\n}\n\n";
+    prompt += `    "${firstQ}": [0]`;
+    if (questions.length > 1) {
+        prompt += `,\n    "${questions[1].displayNumber}": [1, 2]`;
+    }
+    prompt += "\n  }\n}\n\n";
     prompt += "RULES FOR QUIZ SOLVING:\n";
-    prompt += "1. Keys in \"answers\" MUST be question numbers as strings (\"1\", \"2\", \"3\", ...).\n";
+    prompt += `1. Keys in "answers" MUST match the exact question numbers as strings: ${expectedKeys}.\n`;
     prompt += "2. For 'Single Choice' or 'Dropdown': return an array with exactly one 0-based option index, e.g. [0] or [2].\n";
     prompt += "3. For 'Multiple Choice' (Select all that apply): return an array of all correct 0-based option indices, e.g. [0, 2].\n";
     prompt += "4. For 'Fill in the blank' / 'Text' / 'Numeric': return the exact string or number answer (e.g. \"42\" or \"supervised learning\").\n";
     prompt += "5. Pay close attention to Python indentation, syntax, and LaTeX math formulas ($...$) embedded in the questions.\n";
     prompt += "6. Output ONLY the raw JSON object. Do NOT include markdown code blocks (```json) or conversational text.\n\n";
-    prompt += "=== EXAM QUESTIONS ===\n\n";
+    if (totalBatches > 1) {
+        prompt += `=== BATCH ${batchIndex + 1} OF ${totalBatches} (Questions ${firstQ} to ${lastQ}) ===\n\n`;
+    } else {
+        prompt += "=== EXAM QUESTIONS ===\n\n";
+    }
 
     questions.forEach(q => {
         let typeDesc = "Single Choice - Select one";
@@ -2275,17 +2312,20 @@ class SkiperaJS {
             percent: 10,
             completed: 1,
             total: 4,
-            itemName: "Đang quét câu hỏi đề thi..."
+            itemName: "Đang quét và chuẩn bị câu hỏi đề thi..."
         };
         safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
 
-        log(`🧠 [v2.4 Engine] Bắt đầu quét câu hỏi đề thi / bài thực hành...`);
+        log(`🧠 [v2.4 Engine] Chuẩn bị trang và quét câu hỏi đề thi / bài thực hành...`);
+        // Step 0: Rapid scroll to force lazy-loaded questions and components into DOM
+        await prepareQuizPageForScraping();
+
         // Step 1: Initial polling for React SPA component rendering (up to 3s)
         let questions = [];
         for (let attempt = 0; attempt < 6; attempt++) {
             questions = extractQuizQuestions();
             if (questions.length > 0) break;
-            if (attempt < 5) await new Promise(r => setTimeout(r, 500));
+            if (attempt < 5) await new Promise(r => setTimeout(r, 400));
         }
 
         // Step 2: If no questions, check if we need to click Start / Practice / Resume
@@ -2296,6 +2336,7 @@ class SkiperaJS {
                 startBtn.click();
                 for (let attempt = 0; attempt < 10; attempt++) {
                     await new Promise(r => setTimeout(r, 500));
+                    await prepareQuizPageForScraping();
                     questions = extractQuizQuestions();
                     if (questions.length > 0) break;
                 }
@@ -2310,35 +2351,78 @@ class SkiperaJS {
             return;
         }
 
-        log(`📝 Tìm thấy ${questions.length} câu hỏi. Đang tạo Batch Prompt gửi lên ${provider.toUpperCase()}...`);
-        this.lastProgress = {
-            percent: 35,
-            completed: 2,
-            total: 4,
-            stage: `${questions.length} câu`,
-            itemName: `Gửi ${questions.length} câu lên ${provider.toUpperCase()}...`
-        };
-        safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
-        const prompt = generateQuizPrompt(questions);
+        const CHUNK_SIZE = 6;
+        const totalQuestions = questions.length;
+        const totalBatches = Math.ceil(totalQuestions / CHUNK_SIZE);
+
+        log(`📝 Tìm thấy ${totalQuestions} câu hỏi. Sẽ giải ${totalBatches > 1 ? `theo ${totalBatches} đợt (mỗi đợt tối đa ${CHUNK_SIZE} câu để chống tràn token & hạn mức API)` : `trực tiếp 1 đợt`}...`);
+
+        const allAnswers = {};
 
         try {
-            const aiResponseJson = await this.callAiQuizSolver(provider, apiKey, prompt);
+            for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
+                const startIdx = batchIdx * CHUNK_SIZE;
+                const endIdx = Math.min(startIdx + CHUNK_SIZE, totalQuestions);
+                const batchQuestions = questions.slice(startIdx, endIdx);
+                const startQ = batchQuestions[0].displayNumber;
+                const endQ = batchQuestions[batchQuestions.length - 1].displayNumber;
 
-            if (!aiResponseJson) {
-                throw new Error("Không thể phân tích dữ liệu JSON trả về từ AI.");
+                const progressPct = 20 + Math.round(((batchIdx + 0.5) / totalBatches) * 55);
+                this.lastProgress = {
+                    percent: progressPct,
+                    completed: batchIdx + 1,
+                    total: totalBatches,
+                    stage: `Đợt ${batchIdx + 1}/${totalBatches}`,
+                    itemName: `Đang giải câu ${startQ} - ${endQ} (${batchIdx + 1}/${totalBatches})...`
+                };
+                safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
+                log(`🌐 Đang giải đợt ${batchIdx + 1}/${totalBatches} (Câu ${startQ} - ${endQ}) qua ${provider.toUpperCase()}...`);
+
+                const batchPrompt = generateQuizPrompt(batchQuestions, batchIdx, totalBatches);
+
+                let batchJson = null;
+                let batchError = null;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    try {
+                        batchJson = await this.callAiQuizSolver(provider, apiKey, batchPrompt);
+                        if (batchJson) break;
+                    } catch (err) {
+                        batchError = err;
+                        if (attempt === 1 && !err.message.includes('API Key') && !err.message.includes('429')) {
+                            log(`⚠️ Đợt ${batchIdx + 1} gặp sự cố tạm thời (${err.message}). Đang thử lại sau 2s...`);
+                            await new Promise(r => setTimeout(r, 2000));
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                if (!batchJson) {
+                    throw batchError || new Error(`Không thể lấy đáp án cho câu ${startQ} - ${endQ}`);
+                }
+
+                const batchMap = batchJson.answers || batchJson;
+                if (typeof batchMap === 'object') {
+                    Object.assign(allAnswers, batchMap);
+                }
+                log(`✔ Đã nhận xong đáp án câu ${startQ} - ${endQ}.`);
+
+                if (batchIdx < totalBatches - 1) {
+                    await new Promise(r => setTimeout(r, 700));
+                }
             }
 
             this.lastProgress = {
-                percent: 75,
-                completed: 3,
-                total: 4,
+                percent: 80,
+                completed: totalBatches,
+                total: totalBatches,
                 stage: "Điền đáp án",
-                itemName: "Đang điền đáp án vào bài thi..."
+                itemName: "Đang tự động điền đáp án vào đề thi..."
             };
             safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
 
-            log("🎯 Đã nhận đáp án từ AI! Tiến hành tích chọn trên giao diện bài thi...");
-            const filled = await applyQuizAnswers(aiResponseJson, questions);
+            log("🎯 Đã nhận đủ toàn bộ đáp án! Tiến hành tích chọn trên giao diện bài thi...");
+            const filled = await applyQuizAnswers({ answers: allAnswers }, questions);
             if (filled > 0) {
                 log(`🎉 Hoàn tất! Đã tự động điền/tích ${filled} vị trí đáp án (và tự tích cam kết danh dự).`);
                 log("👉 Mời bạn kiểm tra lại các đáp án trên màn hình và bấm 'Nộp bài' (Submit)!");
@@ -2388,17 +2472,20 @@ class SkiperaJS {
             completed: 1,
             total: 3,
             stage: "Quét đề",
-            itemName: "Đang quét câu hỏi đề thi / bài thực hành..."
+            itemName: "Đang quét và chuẩn bị câu hỏi đề thi..."
         };
         safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
-        log("📋 Đang cào toàn bộ câu hỏi đề thi / bài thực hành...");
+        log("📋 Chuẩn bị trang và cào toàn bộ câu hỏi đề thi / bài thực hành...");
         
+        // Step 0: Rapid scroll to force lazy-loaded questions and components into DOM
+        await prepareQuizPageForScraping();
+
         // Step 1: Initial polling for React SPA component rendering (up to 3s)
         let questions = [];
         for (let attempt = 0; attempt < 6; attempt++) {
             questions = extractQuizQuestions();
             if (questions.length > 0) break;
-            if (attempt < 5) await new Promise(r => setTimeout(r, 500));
+            if (attempt < 5) await new Promise(r => setTimeout(r, 400));
         }
 
         // Step 2: If no questions, check if we need to click Start / Practice / Resume
@@ -2417,6 +2504,7 @@ class SkiperaJS {
                 startBtn.click();
                 for (let attempt = 0; attempt < 10; attempt++) {
                     await new Promise(r => setTimeout(r, 500));
+                    await prepareQuizPageForScraping();
                     questions = extractQuizQuestions();
                     if (questions.length > 0) break;
                 }
@@ -2498,6 +2586,7 @@ class SkiperaJS {
             };
             safeSendMessage({ action: "PROGRESS_UPDATE", ...this.lastProgress });
 
+            await prepareQuizPageForScraping();
             const questions = extractQuizQuestions();
             const count = await applyQuizAnswers(parsed, questions);
             log(`🎉 Đã điền thành công ${count} đáp án từ kết quả JSON của bạn!`);
