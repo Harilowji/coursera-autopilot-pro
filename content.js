@@ -2098,8 +2098,12 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Official working Gemini models with high quotas and superior academic reasoning
+            // Priority fallback chain: 3.8 Flash -> 3.7 Flash -> 3.6 Flash -> 3.5 Flash-Lite -> 2.0 Flash -> 1.5 Flash
             const models = [
+                'gemini-3.8-flash',
+                'gemini-3.7-flash',
+                'gemini-3.6-flash',
+                'gemini-3.5-flash-lite',
                 'gemini-2.0-flash',
                 'gemini-1.5-flash',
                 'gemini-2.0-flash-lite',
@@ -2146,9 +2150,10 @@ class SkiperaJS {
                             lastError = new Error(`Hạn mức Google Gemini trong ngày đã hết (Quota limit exceeded): ${errMsg}`);
                             continue;
                         }
-                        if (res.status === 404) {
-                            console.warn(`[Gemini ${model}] 404 Not Found, thử model tiếp theo...`);
-                            lastError = new Error(`Mô hình ${model} không khả dụng trên tài khoản của bạn.`);
+                        // If model not found (404), seamlessly fall back to next model without alarming the user
+                        if (res.status === 404 || errMsg.toLowerCase().includes('not found')) {
+                            console.warn(`[Gemini ${model}] 404 Not Found, chuyển sang model dự phòng tiếp theo...`);
+                            lastError = new Error(errMsg);
                             continue;
                         }
                         log(`⚠️ [Gemini ${model}] Lỗi phản hồi: ${errMsg}. Đang thử model tiếp theo...`);
