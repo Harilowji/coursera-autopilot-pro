@@ -11,7 +11,11 @@
         "clipboardWrite"
     ],
     "host_permissions": [
-        "*://*.coursera.org/*"
+        "*://*.coursera.org/*",
+        "https://generativelanguage.googleapis.com/*",
+        "https://api.groq.com/*",
+        "https://openrouter.ai/*",
+        "https://api.openai.com/*"
     ],
     "declarative_net_request": {
         "rule_resources": [

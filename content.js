@@ -2076,17 +2076,21 @@ class SkiperaJS {
 
     // --- CALL AI API WITH MODEL FALLBACK CHAINS ---
     async callAiQuizSolver(provider, apiKey, prompt) {
-        apiKey = (apiKey || '').trim();
+        apiKey = (apiKey || '').trim().replace(/^["']|["']$/g, '');
+
+        if (!apiKey) {
+            throw new Error("Chưa nhập API Key. Vui lòng nhập API Key trong tab Quiz AI!");
+        }
 
         // Auto-correct provider based on key format if user mismatched them
         if (apiKey.startsWith('sk-or-')) {
-            log("ℹ️ Nhận diện khóa OpenRouter (sk-or-...), tự động chuyển sang OpenRouter.");
+            if (provider !== 'openrouter') log("ℹ️ Nhận diện khóa OpenRouter (sk-or-...), tự động chuyển sang OpenRouter.");
             provider = 'openrouter';
-        } else if (apiKey.startsWith('gsk_') && provider !== 'groq') {
-            log("ℹ️ Nhận diện khóa Groq (gsk_...), tự động chuyển sang Groq.");
+        } else if (apiKey.startsWith('gsk_')) {
+            if (provider !== 'groq') log("ℹ️ Nhận diện khóa Groq (gsk_...), tự động chuyển sang Groq.");
             provider = 'groq';
-        } else if (apiKey.startsWith('AIzaSy') && provider !== 'gemini') {
-            log("ℹ️ Nhận diện khóa Google AI Studio, tự động chuyển sang Gemini.");
+        } else if (apiKey.startsWith('AIzaSy')) {
+            if (provider !== 'gemini') log("ℹ️ Nhận diện khóa Google AI Studio, tự động chuyển sang Gemini.");
             provider = 'gemini';
         } else if (apiKey.startsWith('sk-') && provider !== 'openai' && provider !== 'openrouter') {
             log("ℹ️ Nhận diện khóa OpenAI (sk-...), tự động chuyển sang OpenAI.");
@@ -2094,16 +2098,12 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Priority fallback chain: Prioritize latest models (Gemini 3.8 / 3.7 / 3.6 Flash) for maximum accuracy
+            // Official working Gemini models with high quotas and superior academic reasoning
             const models = [
-                'gemini-3.8-flash',
-                'gemini-3.7-flash',
-                'gemini-3.6-flash',
-                'gemini-3.5-flash-lite',
-                'gemini-2.5-flash',
                 'gemini-2.0-flash',
                 'gemini-1.5-flash',
-                'gemini-1.5-flash-latest'
+                'gemini-2.0-flash-lite',
+                'gemini-1.5-pro'
             ];
             let lastError = null;
             for (const model of models) {
@@ -2124,23 +2124,34 @@ class SkiperaJS {
                                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                                 { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
                                 { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-                                { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
+                                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
                             ]
                         })
                     });
-                    const json = await res.json();
+
+                    let json = null;
+                    try {
+                        json = await res.json();
+                    } catch (_) {
+                        throw new Error(`Máy chủ Google trả về phản hồi không hợp lệ (HTTP ${res.status}).`);
+                    }
+
                     if (!res.ok) {
-                        const errMsg = json.error?.message || `Lỗi HTTP ${res.status}`;
+                        const errMsg = json?.error?.message || `Lỗi HTTP ${res.status}`;
                         if (errMsg.includes('API_KEY_INVALID') || errMsg.toLowerCase().includes('api key not valid')) {
-                            throw new Error("API Key Google Gemini không hợp lệ. Vui lòng kiểm tra lại key của bạn.");
+                            throw new Error("Khóa API Google Gemini không đúng hoặc đã bị xóa. Vui lòng kiểm tra lại key của bạn.");
                         }
                         if (res.status === 429 || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted')) {
-                            console.warn(`Gemini model ${model} chạm quota (${errMsg}), thử model tiếp theo...`);
-                            lastError = new Error(`Resource has been exhausted (Quota Limit): ${errMsg}`);
+                            log(`⚠️ [Gemini ${model}] Đã hết hạn mức miễn phí trong ngày (Quota 429). Đang chuyển sang model tiếp theo...`);
+                            lastError = new Error(`Hạn mức Google Gemini trong ngày đã hết (Quota limit exceeded): ${errMsg}`);
                             continue;
                         }
-                        console.warn(`Gemini model ${model} error (${errMsg}), thử model tiếp theo...`);
+                        if (res.status === 404) {
+                            console.warn(`[Gemini ${model}] 404 Not Found, thử model tiếp theo...`);
+                            lastError = new Error(`Mô hình ${model} không khả dụng trên tài khoản của bạn.`);
+                            continue;
+                        }
+                        log(`⚠️ [Gemini ${model}] Lỗi phản hồi: ${errMsg}. Đang thử model tiếp theo...`);
                         lastError = new Error(errMsg);
                         continue;
                     }
@@ -2164,14 +2175,14 @@ class SkiperaJS {
                     return extractJsonFromText(text);
                 } catch (err) {
                     lastError = err;
-                    if (err.message && err.message.includes('API Key Google Gemini không hợp lệ')) {
+                    if (err.message && (err.message.includes('không đúng') || err.message.includes('bị xóa') || err.message.includes('chặn'))) {
                         throw err;
                     }
                     console.warn(`Lỗi khi gọi Gemini model ${model}:`, err.message);
                     continue;
                 }
             }
-            throw lastError || new Error("Không thể kết nối tới Google Gemini API.");
+            throw lastError || new Error("Không thể kết nối tới Google Gemini API. Hãy kiểm tra kết nối mạng hoặc thử sang Groq!");
 
         } else if (provider === 'groq') {
             const models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
@@ -2197,13 +2208,25 @@ class SkiperaJS {
                             max_tokens: 8192
                         })
                     });
-                    const json = await res.json();
+
+                    let json = null;
+                    try {
+                        json = await res.json();
+                    } catch (_) {
+                        throw new Error(`Máy chủ Groq trả về phản hồi không hợp lệ (HTTP ${res.status}).`);
+                    }
+
                     if (!res.ok) {
-                        const errMsg = json.error?.message || `Lỗi HTTP ${res.status}`;
+                        const errMsg = json?.error?.message || `Lỗi HTTP ${res.status}`;
                         if (errMsg.toLowerCase().includes('invalid_api_key') || errMsg.toLowerCase().includes('unauthorized') || res.status === 401) {
-                            throw new Error("API Key Groq không hợp lệ hoặc chưa được xác thực.");
+                            throw new Error("Khóa API Groq không hợp lệ hoặc chưa được xác thực. Hãy kiểm tra lại key tại console.groq.com/keys.");
                         }
-                        console.warn(`Groq model ${model} error (${errMsg}), thử model tiếp theo...`);
+                        if (res.status === 429) {
+                            log(`⚠️ [Groq ${model}] Chạm hạn mức tốc độ (Rate Limit 429). Đang thử model tiếp theo...`);
+                            lastError = new Error(`Groq chạm hạn mức tốc độ (Rate Limit 429): ${errMsg}`);
+                            continue;
+                        }
+                        log(`⚠️ [Groq ${model}] Lỗi phản hồi: ${errMsg}. Đang thử model tiếp theo...`);
                         lastError = new Error(errMsg);
                         continue;
                     }
@@ -2212,14 +2235,14 @@ class SkiperaJS {
                     return extractJsonFromText(text);
                 } catch (err) {
                     lastError = err;
-                    if (err.message && err.message.includes('API Key Groq không hợp lệ')) {
+                    if (err.message && (err.message.includes('không hợp lệ') || err.message.includes('chặn'))) {
                         throw err;
                     }
                     console.warn(`Lỗi khi gọi Groq model ${model}:`, err.message);
                     continue;
                 }
             }
-            throw lastError || new Error("Không thể kết nối tới Groq API.");
+            throw lastError || new Error("Không thể kết nối tới Groq API. Hãy kiểm tra key hoặc chuyển sang Google Gemini / Zero-Key!");
 
         } else if (provider === 'openrouter') {
             const models = [

@@ -557,6 +557,190 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // --- TEST AI CONNECTION HELPER ---
+    async function testAiConnection(provider, apiKey) {
+        const startTime = Date.now();
+        apiKey = (apiKey || '').trim().replace(/^["']|["']$/g, '');
+
+        if (provider === 'gemini') {
+            const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-pro'];
+            let lastErr = null;
+            for (const model of models) {
+                try {
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: "ping" }] }],
+                            generationConfig: { maxOutputTokens: 5 }
+                        })
+                    });
+                    const json = await res.json();
+                    if (res.ok) {
+                        return { success: true, model: model, timeMs: Date.now() - startTime };
+                    }
+                    const msg = json.error?.message || `HTTP ${res.status}`;
+                    if (msg.includes('API_KEY_INVALID') || msg.toLowerCase().includes('api key not valid')) {
+                        return { success: false, status: 'Sai API Key', message: 'API Key Google Gemini không đúng hoặc đã bị xóa.' };
+                    }
+                    if (res.status === 429 || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('exhausted')) {
+                        return { success: false, status: 'Hết Quota (429)', message: 'Key đã chạm hạn mức miễn phí trong ngày của Google. Hãy dùng Groq hoặc Zero-Key!' };
+                    }
+                    lastErr = msg;
+                } catch (e) {
+                    lastErr = e.message;
+                }
+            }
+            return { success: false, status: 'Lỗi', message: lastErr || 'Không thể kết nối tới Google Gemini.' };
+
+        } else if (provider === 'groq') {
+            const models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+            let lastErr = null;
+            for (const model of models) {
+                try {
+                    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: JSON.stringify({
+                            model: model,
+                            messages: [{ role: 'user', content: 'ping' }],
+                            max_tokens: 5
+                        })
+                    });
+                    const json = await res.json();
+                    if (res.ok) {
+                        return { success: true, model: model, timeMs: Date.now() - startTime };
+                    }
+                    const msg = json.error?.message || `HTTP ${res.status}`;
+                    if (res.status === 401 || msg.toLowerCase().includes('invalid_api_key')) {
+                        return { success: false, status: 'Sai API Key', message: 'API Key Groq không hợp lệ hoặc chưa kích hoạt.' };
+                    }
+                    if (res.status === 429) {
+                        return { success: false, status: 'Chạm Rate Limit (429)', message: 'Groq tạm thời quá tải tốc độ. Hãy thử lại sau vài giây!' };
+                    }
+                    lastErr = msg;
+                } catch (e) {
+                    lastErr = e.message;
+                }
+            }
+            return { success: false, status: 'Lỗi', message: lastErr || 'Không thể kết nối tới Groq.' };
+
+        } else if (provider === 'openrouter') {
+            try {
+                const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`,
+                        'HTTP-Referer': 'https://coursera.org',
+                        'X-Title': 'Coursera Autopilot Pro'
+                    },
+                    body: JSON.stringify({
+                        model: 'google/gemini-2.0-flash-001',
+                        messages: [{ role: 'user', content: 'ping' }],
+                        max_tokens: 5
+                    })
+                });
+                const json = await res.json();
+                if (res.ok) return { success: true, model: 'google/gemini-2.0-flash-001', timeMs: Date.now() - startTime };
+                return { success: false, status: `HTTP ${res.status}`, message: json.error?.message || 'OpenRouter từ chối key.' };
+            } catch (e) {
+                return { success: false, status: 'Lỗi', message: e.message };
+            }
+
+        } else if (provider === 'openai') {
+            try {
+                const res = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: 'gpt-4o-mini',
+                        messages: [{ role: 'user', content: 'ping' }],
+                        max_tokens: 5
+                    })
+                });
+                const json = await res.json();
+                if (res.ok) return { success: true, model: 'gpt-4o-mini', timeMs: Date.now() - startTime };
+                return { success: false, status: `HTTP ${res.status}`, message: json.error?.message || 'OpenAI từ chối key.' };
+            } catch (e) {
+                return { success: false, status: 'Lỗi', message: e.message };
+            }
+        }
+    }
+
+    // --- TEST API KEY BUTTON ---
+    const testApiKeyBtn = document.getElementById('testApiKeyBtn');
+    const testKeyResult = document.getElementById('testKeyResult');
+
+    if (testApiKeyBtn) {
+        testApiKeyBtn.addEventListener('click', async () => {
+            const provider = aiProviderSelect.value;
+            let key = (apiKeyInput.value || '').trim().replace(/^["']|["']$/g, '');
+
+            if (!key) {
+                if (testKeyResult) {
+                    testKeyResult.style.display = 'block';
+                    testKeyResult.style.backgroundColor = 'rgba(239, 68, 68, 0.15)';
+                    testKeyResult.style.color = '#ef4444';
+                    testKeyResult.textContent = '⚠️ Vui lòng nhập API Key trước khi kiểm tra!';
+                }
+                return;
+            }
+
+            // Auto-correct provider based on key format if user mismatched them
+            let detectedProvider = provider;
+            if (key.startsWith('AIzaSy') && provider !== 'gemini') {
+                detectedProvider = 'gemini';
+                aiProviderSelect.value = 'gemini';
+                updateProviderUI('gemini');
+            } else if (key.startsWith('gsk_') && provider !== 'groq') {
+                detectedProvider = 'groq';
+                aiProviderSelect.value = 'groq';
+                updateProviderUI('groq');
+            } else if (key.startsWith('sk-or-') && provider !== 'openrouter') {
+                detectedProvider = 'openrouter';
+                aiProviderSelect.value = 'openrouter';
+                updateProviderUI('openrouter');
+            }
+
+            testApiKeyBtn.disabled = true;
+            testApiKeyBtn.innerHTML = '⏳ <span>Đang kiểm tra kết nối...</span>';
+            if (testKeyResult) {
+                testKeyResult.style.display = 'block';
+                testKeyResult.style.backgroundColor = 'rgba(59, 130, 246, 0.15)';
+                testKeyResult.style.color = '#3b82f6';
+                testKeyResult.textContent = `🌐 Đang gửi yêu cầu xác thực tới máy chủ ${detectedProvider.toUpperCase()}...`;
+            }
+
+            try {
+                const res = await testAiConnection(detectedProvider, key);
+                if (res.success) {
+                    testKeyResult.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+                    testKeyResult.style.color = '#10b981';
+                    testKeyResult.innerHTML = `✅ <b>Khóa API hoạt động hoàn hảo!</b> Đã kết nối thành công tới ${detectedProvider.toUpperCase()} (mô hình <code>${res.model}</code>, độ trễ ${res.timeMs}ms).`;
+                } else {
+                    testKeyResult.style.backgroundColor = 'rgba(239, 68, 68, 0.15)';
+                    testKeyResult.style.color = '#ef4444';
+                    testKeyResult.innerHTML = `❌ <b>Từ chối kết nối (${res.status || 'Lỗi'}):</b> ${res.message}`;
+                }
+            } catch (err) {
+                testKeyResult.style.backgroundColor = 'rgba(239, 68, 68, 0.15)';
+                testKeyResult.style.color = '#ef4444';
+                testKeyResult.innerHTML = `❌ <b>Lỗi kết nối mạng:</b> ${err.message}`;
+            } finally {
+                testApiKeyBtn.disabled = false;
+                testApiKeyBtn.innerHTML = '<span>🔍</span> <span>Kiểm tra Key (Test kết nối)</span>';
+            }
+        });
+    }
+
     // --- 6. AUTO DO QUIZ (API MODE) ---
     if (doQuizBtn) {
         doQuizBtn.addEventListener('click', async () => {
@@ -564,12 +748,30 @@ document.addEventListener('DOMContentLoaded', function () {
             const tab = await getActiveCourseraTab();
             if (!tab) return;
 
-            const provider = aiProviderSelect.value;
-            const key = apiKeyInput.value.trim();
+            let provider = aiProviderSelect.value;
+            let key = (apiKeyInput.value || '').trim().replace(/^["']|["']$/g, '');
 
             if (!key) {
                 log("⚠️ Vui lòng nhập API Key để giải bài trắc nghiệm!");
                 return;
+            }
+
+            // Auto-correct provider based on key format if user mismatched them
+            if (key.startsWith('AIzaSy') && provider !== 'gemini') {
+                log("ℹ️ Tự động chuyển mô hình sang Google Gemini theo định dạng key.");
+                provider = 'gemini';
+                aiProviderSelect.value = 'gemini';
+                updateProviderUI('gemini');
+            } else if (key.startsWith('gsk_') && provider !== 'groq') {
+                log("ℹ️ Tự động chuyển mô hình sang Groq theo định dạng key.");
+                provider = 'groq';
+                aiProviderSelect.value = 'groq';
+                updateProviderUI('groq');
+            } else if (key.startsWith('sk-or-') && provider !== 'openrouter') {
+                log("ℹ️ Tự động chuyển mô hình sang OpenRouter theo định dạng key.");
+                provider = 'openrouter';
+                aiProviderSelect.value = 'openrouter';
+                updateProviderUI('openrouter');
             }
 
             setRunningState(true, "AI Quiz");
