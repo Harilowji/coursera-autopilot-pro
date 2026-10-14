@@ -2164,8 +2164,11 @@ class SkiperaJS {
         }
 
         if (provider === 'gemini') {
-            // Priority fallback chain: 3.8 Flash -> 3.7 Flash -> 3.6 Flash -> 3.5 Flash-Lite -> 2.0 Flash -> 1.5 Flash
+            // Priority fallback chain: 4 Argon -> 4 Flash -> 3.8 Flash -> 3.7 Flash -> 3.6 Flash -> 3.5 Flash-Lite -> 2.0 Flash -> 1.5 Flash
             const models = [
+                'gemini-4-argon',
+                'gemini-4-flash',
+                'gemini-4-flash-preview',
                 'gemini-3.8-flash',
                 'gemini-3.7-flash',
                 'gemini-3.6-flash',
@@ -2180,16 +2183,23 @@ class SkiperaJS {
                 try {
                     log(`🌐 Đang kết nối tới Google Gemini (${model})...`);
                     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                    
+                    const genConfig = {
+                        response_mime_type: "application/json",
+                        maxOutputTokens: 8192
+                    };
+                    if (model.includes('argon')) {
+                        genConfig.thinking_level = "low";
+                    } else {
+                        genConfig.temperature = 0.1;
+                    }
+
                     const res = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             contents: [{ parts: [{ text: prompt }] }],
-                            generationConfig: {
-                                response_mime_type: "application/json",
-                                temperature: 0.1,
-                                maxOutputTokens: 8192
-                            },
+                            generationConfig: genConfig,
                             safetySettings: [
                                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                                 { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -2317,6 +2327,7 @@ class SkiperaJS {
 
         } else if (provider === 'openrouter') {
             const models = [
+                'google/gemini-4-argon',
                 'google/gemini-2.0-flash-001',
                 'meta-llama/llama-3.3-70b-instruct',
                 'deepseek/deepseek-chat',

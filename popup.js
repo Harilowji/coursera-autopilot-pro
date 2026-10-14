@@ -564,6 +564,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (provider === 'gemini') {
             const models = [
+                'gemini-4-argon',
+                'gemini-4-flash',
+                'gemini-4-flash-preview',
                 'gemini-3.8-flash',
                 'gemini-3.7-flash',
                 'gemini-3.6-flash',
